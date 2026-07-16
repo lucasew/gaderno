@@ -17,7 +17,8 @@ type ExecuteResult struct {
 	Evalue         string `json:"evalue"`
 }
 
-// StreamChunk is a partial stdout/stderr update during execute.
+// StreamChunk is a stdout/stderr update during execute.
+// Text is the full terminal-filtered stream so far (replace, do not append).
 type StreamChunk struct {
 	Name string // stdout | stderr
 	Text string
@@ -62,6 +63,9 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 		deadline = d
 	}
 
+	// Stateful VT filters so progress spinners / CR rewrites collapse across chunks.
+	var outTerm, errTerm TermFilter
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -105,18 +109,29 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 			case "stream":
 				name, _ := msg.Content["name"].(string)
 				text := multilineContent(msg.Content["text"])
-				if name == "stderr" {
-					res.Stderr += text
-				} else {
-					name = "stdout"
-					res.Stdout += text
+				if text == "" {
+					continue
 				}
-				if opts.OnStream != nil && text != "" {
-					opts.OnStream(StreamChunk{Name: name, Text: text})
+				if name == "stderr" {
+					errTerm.Write(text)
+					res.Stderr = errTerm.String()
+					if opts.OnStream != nil {
+						// Text is the full filtered stream so far (replace, not append).
+						opts.OnStream(StreamChunk{Name: "stderr", Text: res.Stderr})
+					}
+				} else {
+					outTerm.Write(text)
+					res.Stdout = outTerm.String()
+					if opts.OnStream != nil {
+						opts.OnStream(StreamChunk{Name: "stdout", Text: res.Stdout})
+					}
 				}
 			case "error":
 				res.Ename, _ = msg.Content["ename"].(string)
 				res.Evalue, _ = msg.Content["evalue"].(string)
+				// Tracebacks are often ANSI-colored.
+				res.Ename = FilterTerminal(res.Ename)
+				res.Evalue = FilterTerminal(res.Evalue)
 				res.Status = "error"
 			case "status":
 				state, _ := msg.Content["execution_state"].(string)
@@ -126,6 +141,8 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 						if res.Status == "" {
 							res.Status = "ok"
 						}
+						res.Stdout = outTerm.String()
+						res.Stderr = errTerm.String()
 						return res, nil
 					}
 				}
@@ -133,9 +150,13 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 				if data, ok := msg.Content["data"].(map[string]any); ok {
 					if tp, ok := data["text/plain"]; ok {
 						text := multilineContent(tp)
-						res.Stdout += text
-						if opts.OnStream != nil && text != "" {
-							opts.OnStream(StreamChunk{Name: "stdout", Text: text})
+						if text == "" {
+							continue
+						}
+						outTerm.Write(text)
+						res.Stdout = outTerm.String()
+						if opts.OnStream != nil {
+							opts.OnStream(StreamChunk{Name: "stdout", Text: res.Stdout})
 						}
 					}
 				}

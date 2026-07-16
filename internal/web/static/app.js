@@ -86,6 +86,7 @@ import { createCollabSession } from "./editor.js";
           '.cell-row[data-cell-id="' + msg.cell_id + '"]'
         );
         if (!cell) return;
+        cell._streamBuf = { stdout: "", stderr: "" };
         const out = $(".out-block", cell);
         if (out) {
           out.hidden = false;
@@ -100,15 +101,24 @@ import { createCollabSession } from "./editor.js";
         if (!cell) return;
         const out = $(".out-block", cell);
         if (out) {
+          // Server sends full filtered stream so far (not a raw append delta).
+          if (!cell._streamBuf) cell._streamBuf = { stdout: "", stderr: "" };
+          const name = msg.name === "stderr" ? "stderr" : "stdout";
+          cell._streamBuf[name] = msg.text || "";
           out.hidden = false;
           out.classList.add("border-info", "text-info");
-          out.textContent = (out.textContent || "") + (msg.text || "");
+          out.textContent =
+            (cell._streamBuf.stdout || "") + (cell._streamBuf.stderr || "");
         }
       } else if (msg.type === "exec.result") {
         const cell = document.querySelector(
           '.cell-row[data-cell-id="' + msg.cell_id + '"]'
         );
         if (!cell) return;
+        cell._streamBuf = {
+          stdout: msg.stdout || "",
+          stderr: msg.stderr || "",
+        };
         const out = $(".out-block", cell);
         const prompt = $(".prompt-out", cell);
         if (out) {
