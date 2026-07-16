@@ -252,7 +252,7 @@ import { createCollabSession } from "./editor.js";
     return html;
   }
 
-  function applyStructure  function applyStructure(cells) {
+  function applyStructure(cells) {
     const root = document.getElementById("cells");
     if (!root || !Array.isArray(cells)) return;
     // Dedupe by id (last wins order as given, first occurrence kept)
