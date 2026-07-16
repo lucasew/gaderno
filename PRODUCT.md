@@ -12,15 +12,15 @@ Primary tasks: open a workspace, open/create notebooks, edit cells, run code, se
 Quiet · Dense · Instrument-like (cobalt signal on steel-neutral paper)
 
 ## Visual direction
-- **daisyUI 5 + Tailwind 4** (same pipeline pattern as contapila: `bun run build:css` → embedded `app.css`)
+- **daisyUI 5 + Tailwind 4**: source in `styles/input.css`, `bun run build:css` → embedded `internal/web/static/app.css`
 - **Jupyter familiarity** for cell semantics (In/Out, code vs markdown, run affordances)
-- **Contapila-class density** for chrome: tight sticky topbar, `btn-xs` / `table-xs`, no airy marketing cards
+- **Dense tool chrome**: sticky topbar ~2.5rem, `btn-xs` / `table-xs` / `badge-xs`, hairline cell separators, no airy marketing cards
 - Themes: `gaderno-light` / `gaderno-dark`
 - Restrained palette: pure base + cobalt primary (hue ~250°)
 
 ## Anti-references
 - Classic JupyterLab chrome clone (heavy sidebars, purple Lab skin)
-- Contapila green/gold money theme (different product)
+- Finance/money green–gold product skins
 - Cream/sand SaaS backgrounds
 - Glassmorphism, gradient text, hero KPI cards
 

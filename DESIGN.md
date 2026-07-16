@@ -1,7 +1,7 @@
 # gaderno web UI
 
 ## Intent
-Notebook product surface with **daisyUI 5 + Tailwind 4**, Jupyter-legible cells, contapila-class density.
+Notebook product surface with **daisyUI 5 + Tailwind 4**, Jupyter-legible cells, and dense tool chrome (tight sticky topbar, compact controls, full-bleed content).
 
 ## Stack
 - Source: `styles/input.css` (`@plugin "daisyui"`, custom themes)
