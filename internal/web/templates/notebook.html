@@ -26,7 +26,7 @@
       <span class="font-code text-xs truncate min-w-0" title="{{ .Path }}">{{ .Path }}</span>
     </div>
     <div class="navbar-end gap-1 shrink-0">
-      <span class="badge badge-xs badge-ghost font-code" id="kernel-pill" title="Kernelspec">kernel</span>
+      <button type="button" class="btn btn-ghost btn-xs font-code max-w-[10rem] truncate" id="btn-kernel" title="Select kernel">Select kernel…</button>
       <span class="badge badge-xs badge-ghost" id="status-pill" data-state="off">offline</span>
       <a class="btn btn-ghost btn-xs" href="/api/notebooks/{{ .Path }}?download=1">Export</a>
       <button type="button" class="btn btn-primary btn-xs" id="btn-save">Save</button>
@@ -109,6 +109,23 @@
       </div>
     </aside>
   </div>
+
+
+  <dialog id="kernel-dialog" class="modal">
+    <div class="modal-box max-w-md p-0 gap-0">
+      <div class="px-3 py-2 border-b border-base-300 flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-sm">Select kernel</h3>
+          <p class="text-[0.625rem] text-base-content/50">Required before Run · not started until you run a cell</p>
+        </div>
+        <form method="dialog"><button class="btn btn-ghost btn-xs btn-square" aria-label="Close">✕</button></form>
+      </div>
+      <div id="kernel-list" class="max-h-80 overflow-y-auto p-2 text-xs">
+        <p class="text-base-content/50 px-1 py-2">Loading…</p>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
 
   <script>
     window.__GADERNO__ = {

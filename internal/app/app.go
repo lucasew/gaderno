@@ -48,6 +48,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	})
 	registerWorkspaceRoutes(mux, ws, logger)
 	registerNotebookRoutes(mux, st, reg, cfg.Kernel, logger)
+	registerKernelRoutes(mux, reg, logger)
 	registerWS(mux, reg, logger)
 
 	srv := &http.Server{

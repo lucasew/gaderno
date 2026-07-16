@@ -9,23 +9,19 @@ import (
 
 // Registry holds live hubs keyed by notebook relative path.
 type Registry struct {
-	mu     sync.Mutex
-	hubs   map[string]*Hub
-	store  *store.Store
-	root   string
-	kernel string // default kernelspec
+	mu    sync.Mutex
+	hubs  map[string]*Hub
+	store *store.Store
+	root  string
 }
 
 // NewRegistry creates an empty registry.
-func NewRegistry(st *store.Store, root, defaultKernel string) *Registry {
-	if defaultKernel == "" {
-		defaultKernel = "python3"
-	}
+// defaultKernel is unused for autostart; kept for CLI compat (ignored).
+func NewRegistry(st *store.Store, root, _ string) *Registry {
 	return &Registry{
-		hubs:   make(map[string]*Hub),
-		store:  st,
-		root:   root,
-		kernel: defaultKernel,
+		hubs:  make(map[string]*Hub),
+		store: st,
+		root:  root,
 	}
 }
 
@@ -39,9 +35,6 @@ func (r *Registry) GetOrOpen(ctx context.Context, rel string) (*Hub, error) {
 	h, err := Open(ctx, r.store, r.root, rel)
 	if err != nil {
 		return nil, err
-	}
-	if h.kernelName == "python3" && r.kernel != "" {
-		h.kernelName = r.kernel
 	}
 	r.hubs[rel] = h
 	return h, nil

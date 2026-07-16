@@ -13,7 +13,7 @@ import { mountEditors } from "./editor.js";
   const cfg = window.__GADERNO__ || {};
   const path = cfg.path || "";
   const statusEl = $("#status-pill");
-  const kernelEl = $("#kernel-pill");
+  const btnKernel = $("#btn-kernel");
 
   // Debounce timers per cell
   const pending = new Map();
@@ -125,6 +125,10 @@ import { mountEditors } from "./editor.js";
         $all("button.run").forEach(function (b) {
           b.disabled = false;
         });
+      } else if (msg.type === "kernel.status") {
+        applyKernelStatus(msg.status);
+      } else if (msg.type === "kernel.needs_pick") {
+        openKernelChooser();
       } else if (msg.type === "chat.message") {
         const log = $("#chat-log");
         if (!log) return;
@@ -272,6 +276,114 @@ import { mountEditors } from "./editor.js";
   }
 
 
+  // —— Kernel chooser ——
+  const kernelDialog = document.getElementById("kernel-dialog");
+  const kernelList = document.getElementById("kernel-list");
+  let kernelStatus = { needs_kernel: true, bound_name: "", display_name: "", phase: "needs_kernel" };
+
+  function applyKernelStatus(st) {
+    if (!st) return;
+    kernelStatus = st;
+    if (btnKernel) {
+      if (st.needs_kernel || !st.bound_name) {
+        btnKernel.textContent = "Select kernel…";
+        btnKernel.classList.add("text-warning");
+      } else {
+        const label = st.display_name || st.bound_name;
+        const run = st.running ? " · on" : "";
+        btnKernel.textContent = label + run;
+        btnKernel.classList.remove("text-warning");
+        btnKernel.title = st.bound_name + " (" + st.phase + ")";
+      }
+    }
+    if (st.needs_kernel && kernelDialog && !kernelDialog.open) {
+      // auto-open chooser once when needed
+      openKernelChooser();
+    }
+  }
+
+  async function openKernelChooser() {
+    if (!kernelDialog || !kernelList) return;
+    kernelList.innerHTML = '<p class="text-base-content/50 px-1 py-2">Loading…</p>';
+    kernelDialog.showModal();
+    try {
+      const r = await fetch("/api/kernels");
+      const data = await r.json();
+      const groups = data.groups || {};
+      const order = ["jupyter", "uv"];
+      const titles = { jupyter: "Jupyter", uv: "uv" };
+      let html = "";
+      let any = false;
+      order.forEach(function (g) {
+        const items = groups[g] || [];
+        if (!items.length) return;
+        any = true;
+        html += '<div class="mb-2">';
+        html += '<div class="text-[0.625rem] uppercase tracking-wide font-semibold text-base-content/45 px-1 py-1">' + titles[g] + "</div>";
+        items.forEach(function (k) {
+          const sel = kernelStatus.bound_name === k.name ? " border-primary bg-primary/10" : "";
+          html +=
+            '<button type="button" class="kernel-pick btn btn-ghost btn-sm w-full justify-start font-normal h-auto min-h-0 py-1.5 px-2 mb-0.5 border border-transparent' +
+            sel +
+            '" data-name="' +
+            k.name.replace(/"/g, "&quot;") +
+            '">';
+          html += '<span class="truncate text-left"><span class="font-medium">' + escapeHtml(k.display_name || k.name) + "</span>";
+          html += '<span class="block text-[0.625rem] text-base-content/45 font-code">' + escapeHtml(k.name) + "</span></span></button>";
+        });
+        html += "</div>";
+      });
+      if (!any) {
+        html = '<p class="text-base-content/50 px-1 py-2">No kernels found. Install a Jupyter kernelspec or <span class="font-code">uv</span>.</p>';
+      }
+      kernelList.innerHTML = html;
+    } catch (e) {
+      kernelList.innerHTML = '<p class="text-error px-1 py-2">Failed to load kernels</p>';
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  if (btnKernel) {
+    btnKernel.addEventListener("click", function () {
+      openKernelChooser();
+    });
+  }
+  if (kernelList) {
+    kernelList.addEventListener("click", function (e) {
+      const b = e.target.closest(".kernel-pick");
+      if (!b) return;
+      const name = b.getAttribute("data-name");
+      if (!name) return;
+      b.disabled = true;
+      fetch("/api/kernel/bind", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path, name: name }),
+      })
+        .then(function (r) {
+          if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.statusText); });
+          return r.json();
+        })
+        .then(function (st) {
+          applyKernelStatus(st);
+          if (kernelDialog) kernelDialog.close();
+          setStatus("kernel bound", "ok");
+          setTimeout(function () { setStatus("live", "ok"); }, 600);
+        })
+        .catch(function (err) {
+          setStatus(String(err.message || err), "err");
+          b.disabled = false;
+        });
+    });
+  }
+
+  // patch message handler additions via monkey - insert into onmessage by replacing
   if (path) connect();
-  if (kernelEl && cfg.kernel) kernelEl.textContent = cfg.kernel;
 })();

@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -67,19 +66,6 @@ func Discover() ([]Spec, error) {
 	return out, nil
 }
 
-// Find returns a kernelspec by name, or error.
-func Find(name string) (Spec, error) {
-	all, err := Discover()
-	if err != nil {
-		return Spec{}, err
-	}
-	for _, s := range all {
-		if s.Name == name {
-			return s, nil
-		}
-	}
-	return Spec{}, fmt.Errorf("kernelspec %q not found", name)
-}
 
 // searchPaths mirrors jupyter_core.paths.jupyter_path("kernels") order:
 // JUPYTER_PATH entries, then data dirs' kernels/ subdirs (user → env → system).

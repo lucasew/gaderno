@@ -25,6 +25,7 @@ type wsControl struct {
 	CellID string `json:"cell_id,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Source string `json:"source,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) {
@@ -44,6 +45,7 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 		client := hub.AddClient(clientID)
 		defer hub.RemoveClient(clientID)
 		defer conn.Close()
+		hub.SendKernelStatus(client)
 
 		done := make(chan struct{})
 		go func() {
@@ -128,6 +130,14 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 		case client.Out <- session.Outbound{Data: b}:
 		default:
 		}
+	case "kernel.bind":
+		name := ctrl.Name
+		if name == "" {
+			name = ctrl.Text
+		}
+		if err := hub.BindKernel(name); err != nil {
+			sendErr(client, err.Error())
+		}
 	case "exec.run":
 		go func() {
 			// Optional: apply source from client if provided (flush-before-run)
@@ -136,6 +146,13 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 			}
 			ctx := r.Context()
 			if err := hub.EnsureKernel(ctx, ""); err != nil {
+				if err.Error() == "no kernel selected" {
+					b, _ := json.Marshal(map[string]any{"type": "kernel.needs_pick"})
+					select {
+					case client.Out <- session.Outbound{Data: b}:
+					default:
+					}
+				}
 				sendErr(client, err.Error())
 				return
 			}

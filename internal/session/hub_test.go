@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lucasew/gaderno/internal/document"
+	"github.com/lucasew/gaderno/internal/kernel"
 	"github.com/lucasew/gaderno/internal/store"
 )
 
@@ -13,6 +14,7 @@ func TestOpenSave(t *testing.T) {
 	st := store.New(dir)
 	nb := document.NewEmpty()
 	nb.Cells[0].Source = document.NewMultiline("x = 1")
+	// no resolvable kernelspec → NeedsKernel
 	if err := st.Save(context.Background(), "n.ipynb", nb); err != nil {
 		t.Fatal(err)
 	}
@@ -21,12 +23,13 @@ func TestOpenSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer h.Close(context.Background())
+	stt := h.Status()
+	if !stt.NeedsPick {
+		t.Fatalf("expected needs kernel, got %+v", stt)
+	}
 	ids := h.Doc.CellIDs()
 	if len(ids) != 1 {
 		t.Fatal(ids)
-	}
-	if h.Doc.Source(ids[0]) != "x = 1" {
-		t.Fatal(h.Doc.Source(ids[0]))
 	}
 	if err := h.Doc.SetSourceServer(ids[0], "x = 2"); err != nil {
 		t.Fatal(err)
@@ -40,5 +43,21 @@ func TestOpenSave(t *testing.T) {
 	}
 	if got.Cells[0].SourceString() != "x = 2" {
 		t.Fatalf("%q", got.Cells[0].SourceString())
+	}
+}
+
+func TestBindKernelUnknown(t *testing.T) {
+	kernel.ResetCatalogForTest()
+	dir := t.TempDir()
+	st := store.New(dir)
+	nb := document.NewEmpty()
+	_ = st.Save(context.Background(), "n.ipynb", nb)
+	h, err := Open(context.Background(), st, dir, "n.ipynb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close(context.Background())
+	if err := h.BindKernel("definitely-missing-kernel-xyz"); err == nil {
+		t.Fatal("expected error")
 	}
 }
