@@ -17,8 +17,25 @@ type ExecuteResult struct {
 	Evalue         string `json:"evalue"`
 }
 
+// StreamChunk is a partial stdout/stderr update during execute.
+type StreamChunk struct {
+	Name string // stdout | stderr
+	Text string
+}
+
+// ExecuteOpts configures execute behavior.
+type ExecuteOpts struct {
+	// OnStream is called for each IOPub stream chunk (may be nil).
+	OnStream func(StreamChunk)
+}
+
 // Execute runs code on the kernel and collects IOPub until idle for this msg.
 func (m *Manager) Execute(ctx context.Context, code string) (ExecuteResult, error) {
+	return m.ExecuteOpts(ctx, code, ExecuteOpts{})
+}
+
+// ExecuteOpts runs code with optional stream callbacks.
+func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts) (ExecuteResult, error) {
 	if m.Conn == nil {
 		return ExecuteResult{}, fmt.Errorf("no connection")
 	}
@@ -40,19 +57,29 @@ func (m *Manager) Execute(ctx context.Context, code string) (ExecuteResult, erro
 
 	var res ExecuteResult
 	res.MsgID = msgID
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(120 * time.Second)
 	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}
 
-	for time.Now().Before(deadline) {
+	for {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		// Prefer non-blocking-ish short reads by alternating shell/iopub with timeout via context on socket — Recv blocks.
-		// Use a helper with goroutine select.
-		msg, ch, err := m.Conn.recvAny(deadline)
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			return res, fmt.Errorf("execute timeout")
+		}
+		rctx, cancel := context.WithTimeout(ctx, remain)
+		msg, ch, err := m.Conn.recvEither(rctx)
+		cancel()
 		if err != nil {
+			if ctx.Err() != nil {
+				return res, ctx.Err()
+			}
+			if time.Now().After(deadline) {
+				return res, fmt.Errorf("execute timeout")
+			}
 			continue
 		}
 		parent := msg.ParentHeader.MsgID
@@ -71,7 +98,7 @@ func (m *Manager) Execute(ctx context.Context, code string) (ExecuteResult, erro
 				}
 			}
 		case "iopub":
-			if parent != msgID && parent != "" {
+			if parent != "" && parent != msgID {
 				continue
 			}
 			switch msg.Header.MsgType {
@@ -81,7 +108,11 @@ func (m *Manager) Execute(ctx context.Context, code string) (ExecuteResult, erro
 				if name == "stderr" {
 					res.Stderr += text
 				} else {
+					name = "stdout"
 					res.Stdout += text
+				}
+				if opts.OnStream != nil && text != "" {
+					opts.OnStream(StreamChunk{Name: name, Text: text})
 				}
 			case "error":
 				res.Ename, _ = msg.Content["ename"].(string)
@@ -89,48 +120,38 @@ func (m *Manager) Execute(ctx context.Context, code string) (ExecuteResult, erro
 				res.Status = "error"
 			case "status":
 				state, _ := msg.Content["execution_state"].(string)
-				if state == "idle" && parent == msgID {
-					if res.Status == "" {
-						res.Status = "ok"
+				if state == "idle" && (parent == msgID || parent == "") {
+					// Only finish when this execute is idle; empty parent is rare
+					if parent == msgID {
+						if res.Status == "" {
+							res.Status = "ok"
+						}
+						return res, nil
 					}
-					return res, nil
 				}
-			case "execute_result":
+			case "execute_result", "display_data":
 				if data, ok := msg.Content["data"].(map[string]any); ok {
 					if tp, ok := data["text/plain"]; ok {
-						res.Stdout += multilineContent(tp)
+						text := multilineContent(tp)
+						res.Stdout += text
+						if opts.OnStream != nil && text != "" {
+							opts.OnStream(StreamChunk{Name: "stdout", Text: text})
+						}
 					}
 				}
 			}
 		}
 	}
-	return res, fmt.Errorf("execute timeout")
 }
 
-func (c *Conn) recvAny(deadline time.Time) (Message, string, error) {
-	type result struct {
-		msg Message
-		ch  string
-		err error
-	}
-	ch := make(chan result, 2)
-	go func() {
-		msg, err := c.RecvShell(context.Background())
-		ch <- result{msg, "shell", err}
-	}()
-	go func() {
-		msg, err := c.RecvIOPub(context.Background())
-		ch <- result{msg, "iopub", err}
-	}()
-	timeout := time.Until(deadline)
-	if timeout < 0 {
-		timeout = 0
-	}
+func (c *Conn) recvEither(ctx context.Context) (Message, string, error) {
 	select {
-	case r := <-ch:
-		return r.msg, r.ch, r.err
-	case <-time.After(timeout):
-		return Message{}, "", fmt.Errorf("timeout")
+	case <-ctx.Done():
+		return Message{}, "", ctx.Err()
+	case msg := <-c.shellCh:
+		return msg, "shell", nil
+	case msg := <-c.iopubCh:
+		return msg, "iopub", nil
 	}
 }
 

@@ -301,13 +301,24 @@ func (h *Hub) persistKernelspecLocked(name string) error {
 	return h.store.Save(context.Background(), h.Path, nb)
 }
 
-// SetCellSource updates cell source in the CRDT.
-func (h *Hub) SetCellSource(cellID, source string) error {
-	return h.Doc.SetSourceServer(cellID, source)
+// SetCellSource updates cell source in the CRDT and notifies other clients.
+// skipClient is the originator (they already have the text); empty = notify all.
+func (h *Hub) SetCellSource(cellID, source string, skipClient string) error {
+	if err := h.Doc.SetSourceServer(cellID, source); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]any{
+		"type":    "cell.source",
+		"cell_id": cellID,
+		"source":  source,
+	})
+	h.BroadcastJSON(b, skipClient)
+	return nil
 }
 
 // ExecuteCell runs a cell by id (kernel must already be started).
-func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteResult, error) {
+// onStream may be nil; when set, called for each stdout/stderr chunk.
+func (h *Hub) ExecuteCell(ctx context.Context, cellID string, onStream func(kernel.StreamChunk)) (kernel.ExecuteResult, error) {
 	h.mu.Lock()
 	k := h.kernel
 	src := h.Doc.Source(cellID)
@@ -320,7 +331,16 @@ func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteRes
 	h.mu.Unlock()
 	h.broadcastKernelStatus(st)
 
-	res, err := k.Execute(ctx, src)
+	// clear outputs signal
+	b0, _ := json.Marshal(map[string]any{
+		"type":    "exec.clear",
+		"cell_id": cellID,
+	})
+	h.BroadcastJSON(b0, "")
+
+	res, err := k.ExecuteOpts(ctx, src, kernel.ExecuteOpts{
+		OnStream: onStream,
+	})
 
 	h.mu.Lock()
 	if h.kernel != nil {

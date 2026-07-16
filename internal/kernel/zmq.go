@@ -20,7 +20,12 @@ type Conn struct {
 	control zmq4.Socket
 	hb      zmq4.Socket
 
-	mu sync.Mutex
+	shellCh chan Message
+	iopubCh chan Message
+
+	mu     sync.Mutex
+	closed bool
+	cancel context.CancelFunc
 }
 
 func dialOpts() []zmq4.Option {
@@ -31,10 +36,17 @@ func dialOpts() []zmq4.Option {
 	}
 }
 
-// Dial opens sockets (IOPub first) and dials endpoints.
+// Dial opens sockets (IOPub first) and starts reader loops.
 func Dial(ctx context.Context, cf ConnectionFile, session string) (*Conn, error) {
-	c := &Conn{CF: cf, Session: session}
+	c := &Conn{
+		CF:      cf,
+		Session: session,
+		shellCh: make(chan Message, 64),
+		iopubCh: make(chan Message, 256),
+	}
 	opts := dialOpts()
+	rctx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
 
 	c.iopub = zmq4.NewSub(ctx, opts...)
 	if err := c.iopub.SetOption(zmq4.OptionSubscribe, ""); err != nil {
@@ -66,11 +78,48 @@ func Dial(ctx context.Context, cf ConnectionFile, session string) (*Conn, error)
 		_ = c.Close()
 		return nil, fmt.Errorf("hb dial: %w", err)
 	}
+
+	go c.readLoop(rctx, c.shell, c.shellCh)
+	go c.readLoop(rctx, c.iopub, c.iopubCh)
 	return c, nil
 }
 
-// Close closes all sockets.
+func (c *Conn) readLoop(ctx context.Context, sock zmq4.Socket, out chan<- Message) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		raw, err := sock.Recv()
+		if err != nil {
+			return
+		}
+		msg, err := DecodeWire(c.CF.KeyBytes(), raw.Frames)
+		if err != nil {
+			continue
+		}
+		select {
+		case out <- msg:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// Close closes all sockets and stops readers.
 func (c *Conn) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	if c.cancel != nil {
+		c.cancel()
+	}
+	c.mu.Unlock()
+
 	var first error
 	closeOne := func(s zmq4.Socket) {
 		if s == nil {
@@ -93,14 +142,30 @@ func (c *Conn) SendShell(msg Message) error {
 	return c.send(c.shell, msg)
 }
 
-// RecvShell receives one shell message.
+// RecvShell receives one shell message (from reader loop).
 func (c *Conn) RecvShell(ctx context.Context) (Message, error) {
-	return c.recv(ctx, c.shell)
+	select {
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	case msg, ok := <-c.shellCh:
+		if !ok {
+			return Message{}, fmt.Errorf("shell closed")
+		}
+		return msg, nil
+	}
 }
 
-// RecvIOPub receives one iopub message.
+// RecvIOPub receives one iopub message (from reader loop).
 func (c *Conn) RecvIOPub(ctx context.Context) (Message, error) {
-	return c.recv(ctx, c.iopub)
+	select {
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	case msg, ok := <-c.iopubCh:
+		if !ok {
+			return Message{}, fmt.Errorf("iopub closed")
+		}
+		return msg, nil
+	}
 }
 
 // KernelInfo sends kernel_info_request and waits for kernel_info_reply.
@@ -112,39 +177,26 @@ func (c *Conn) KernelInfo(ctx context.Context) (Message, error) {
 	if err := c.SendShell(req); err != nil {
 		return Message{}, err
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	if d, ok := ctx.Deadline(); ok {
-		deadline = d
-	}
-	for time.Now().Before(deadline) {
-		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		msg, err := c.RecvShell(rctx)
-		cancel()
+	for {
+		msg, err := c.RecvShell(ctx)
 		if err != nil {
-			continue
+			return Message{}, err
 		}
 		if msg.Header.MsgType == "kernel_info_reply" {
 			return msg, nil
 		}
 	}
-	return Message{}, fmt.Errorf("timeout waiting for kernel_info_reply")
 }
 
 func (c *Conn) send(sock zmq4.Socket, msg Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("connection closed")
+	}
 	frames, err := EncodeWire(c.CF.KeyBytes(), msg)
 	if err != nil {
 		return err
 	}
 	return sock.SendMulti(zmq4.NewMsgFrom(frames...))
-}
-
-func (c *Conn) recv(ctx context.Context, sock zmq4.Socket) (Message, error) {
-	_ = ctx
-	msg, err := sock.Recv()
-	if err != nil {
-		return Message{}, err
-	}
-	return DecodeWire(c.CF.KeyBytes(), msg.Frames)
 }

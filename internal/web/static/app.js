@@ -17,6 +17,7 @@ import { mountEditors } from "./editor.js";
 
   // Debounce timers per cell
   const pending = new Map();
+  const remoteApplying = new Set();
   let api = null;
   let ws = null;
 
@@ -49,6 +50,7 @@ import { mountEditors } from "./editor.js";
   }
 
   function scheduleSource(cellId, source) {
+    if (remoteApplying.has(cellId)) return;
     setStatus("editing…", "run");
     const prev = pending.get(cellId);
     if (prev) clearTimeout(prev);
@@ -88,6 +90,40 @@ import { mountEditors } from "./editor.js";
       }
       if (msg.type === "cell.source_ack") {
         setStatus("live", "ok");
+      } else if (msg.type === "cell.source") {
+        if (!api || !msg.cell_id) return;
+        remoteApplying.add(msg.cell_id);
+        try {
+          api.setSource(msg.cell_id, msg.source || "");
+        } finally {
+          // allow next tick so CM updateListener does not echo
+          setTimeout(function () {
+            remoteApplying.delete(msg.cell_id);
+          }, 0);
+        }
+      } else if (msg.type === "exec.clear") {
+        const cell = document.querySelector(
+          '.cell-row[data-cell-id="' + msg.cell_id + '"]'
+        );
+        if (!cell) return;
+        const out = $(".out-block", cell);
+        if (out) {
+          out.hidden = false;
+          out.textContent = "";
+          out.classList.remove("border-error", "bg-error/10", "text-error");
+          out.classList.add("border-info", "text-info");
+        }
+      } else if (msg.type === "exec.stream") {
+        const cell = document.querySelector(
+          '.cell-row[data-cell-id="' + msg.cell_id + '"]'
+        );
+        if (!cell) return;
+        const out = $(".out-block", cell);
+        if (out) {
+          out.hidden = false;
+          out.classList.add("border-info", "text-info");
+          out.textContent = (out.textContent || "") + (msg.text || "");
+        }
       } else if (msg.type === "exec.result") {
         const cell = document.querySelector(
           '.cell-row[data-cell-id="' + msg.cell_id + '"]'
@@ -107,12 +143,14 @@ import { mountEditors } from "./editor.js";
           if (msg.status === "error") {
             out.classList.add("border-error", "bg-error/10", "text-error");
           }
+          // Prefer full buffers from result (authoritative); if empty keep streamed text
           let t = "";
           if (msg.stdout) t += msg.stdout;
           if (msg.stderr) t += msg.stderr;
           if (msg.status === "error")
             t += (msg.ename || "Error") + ": " + (msg.evalue || "");
-          out.textContent = t || msg.status || "ok";
+          if (t) out.textContent = t;
+          else if (!out.textContent) out.textContent = msg.status || "ok";
         }
         if (prompt && msg.execution_count != null) {
           prompt.textContent = "Out[" + msg.execution_count + "]:";

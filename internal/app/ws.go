@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/lucasew/gaderno/internal/kernel"
 	"github.com/lucasew/gaderno/internal/session"
 )
 
@@ -15,11 +17,10 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024 * 64,
 	WriteBufferSize: 1024 * 64,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // local-first; tighten with token later
+		return true
 	},
 }
 
-// JSON control messages (text frames).
 type wsControl struct {
 	Type   string `json:"type"`
 	CellID string `json:"cell_id,omitempty"`
@@ -45,8 +46,8 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 		client := hub.AddClient(clientID)
 		defer hub.RemoveClient(clientID)
 		defer conn.Close()
-		hub.SendKernelStatus(client)
 
+		// Single writer: all outbound frames go through client.Out (gorilla/websocket is not concurrent-safe).
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -62,9 +63,11 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 			}
 		}()
 
-		step1 := hub.EncodeSyncStep1()
-		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		_ = conn.WriteMessage(websocket.BinaryMessage, step1)
+		hub.SendKernelStatus(client)
+		select {
+		case client.Out <- session.Outbound{Binary: true, Data: hub.EncodeSyncStep1()}:
+		default:
+		}
 
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -90,14 +93,14 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 				if err := json.Unmarshal(data, &ctrl); err != nil {
 					continue
 				}
-				handleControl(r, hub, client, ctrl, logger)
+				handleControl(hub, client, clientID, ctrl, logger)
 			}
 		}
 		<-done
 	})
 }
 
-func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ctrl wsControl, logger *slog.Logger) {
+func handleControl(hub *session.Hub, client *session.Client, clientID string, ctrl wsControl, logger *slog.Logger) {
 	switch ctrl.Type {
 	case "ping":
 		b, _ := json.Marshal(map[string]string{"type": "pong"})
@@ -117,11 +120,10 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 			sendErr(client, "cell_id required")
 			return
 		}
-		if err := hub.SetCellSource(ctrl.CellID, ctrl.Source); err != nil {
+		if err := hub.SetCellSource(ctrl.CellID, ctrl.Source, clientID); err != nil {
 			sendErr(client, err.Error())
 			return
 		}
-		// ack originator (synced to server memory)
 		b, _ := json.Marshal(map[string]any{
 			"type":    "cell.source_ack",
 			"cell_id": ctrl.CellID,
@@ -140,11 +142,15 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 		}
 	case "exec.run":
 		go func() {
-			// Optional: apply source from client if provided (flush-before-run)
-			if ctrl.Source != "" && ctrl.CellID != "" {
-				_ = hub.SetCellSource(ctrl.CellID, ctrl.Source)
+			// Always prefer client buffer when provided (including empty string after clear).
+			// Use presence of cell_id + explicit source field via separate flag — if Source is sent, apply.
+			// Clients always send source on run.
+			if ctrl.CellID != "" {
+				_ = hub.SetCellSource(ctrl.CellID, ctrl.Source, clientID)
 			}
-			ctx := r.Context()
+			// Long-lived exec context (not tied to a short HTTP request)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
 			if err := hub.EnsureKernel(ctx, ""); err != nil {
 				if err.Error() == "no kernel selected" {
 					b, _ := json.Marshal(map[string]any{"type": "kernel.needs_pick"})
@@ -156,7 +162,15 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 				sendErr(client, err.Error())
 				return
 			}
-			res, err := hub.ExecuteCell(ctx, ctrl.CellID)
+			res, err := hub.ExecuteCell(ctx, ctrl.CellID, func(ch kernel.StreamChunk) {
+				b, _ := json.Marshal(map[string]any{
+					"type":    "exec.stream",
+					"cell_id": ctrl.CellID,
+					"name":    ch.Name,
+					"text":    ch.Text,
+				})
+				hub.BroadcastJSON(b, "")
+			})
 			if err != nil {
 				sendErr(client, err.Error())
 				return

@@ -105,7 +105,7 @@ func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Re
 			http.Error(w, "kernel: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		res, err := hub.ExecuteCell(ctx, body.CellID)
+		res, err := hub.ExecuteCell(ctx, body.CellID, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
