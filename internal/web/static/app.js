@@ -17,7 +17,11 @@
   function setStatus(text, state) {
     if (!statusEl) return;
     statusEl.textContent = text;
-    if (state) statusEl.dataset.state = state;
+    statusEl.className = "badge badge-xs";
+    if (state === "ok") statusEl.classList.add("badge-success");
+    else if (state === "run") statusEl.classList.add("badge-info");
+    else if (state === "err") statusEl.classList.add("badge-error");
+    else statusEl.classList.add("badge-ghost");
   }
 
   let ws;
@@ -26,40 +30,33 @@
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(proto + "://" + location.host + "/ws/notebooks/" + path);
     ws.binaryType = "arraybuffer";
-    ws.onopen = function () {
-      setStatus("live", "ok");
-    };
+    ws.onopen = function () { setStatus("live", "ok"); };
     ws.onclose = function () {
       setStatus("offline", "off");
       setTimeout(connect, 1500);
     };
-    ws.onerror = function () {
-      setStatus("error", "err");
-    };
+    ws.onerror = function () { setStatus("error", "err"); };
     ws.onmessage = function (ev) {
-      if (typeof ev.data !== "string") return; // yjs binary reserved
+      if (typeof ev.data !== "string") return;
       let msg;
-      try {
-        msg = JSON.parse(ev.data);
-      } catch (_) {
-        return;
-      }
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
       if (msg.type === "exec.result") {
-        const cell = document.querySelector('.cell[data-cell-id="' + msg.cell_id + '"]');
+        const cell = document.querySelector('.cell-row[data-cell-id="' + msg.cell_id + '"], .cell[data-cell-id="' + msg.cell_id + '"]');
         if (!cell) return;
         const out = $(".out-block", cell);
         const prompt = $(".prompt-out", cell);
-        out.hidden = false;
-        out.classList.remove("is-running");
-        out.classList.toggle("is-error", msg.status === "error");
-        let t = "";
-        if (msg.stdout) t += msg.stdout;
-        if (msg.stderr) t += msg.stderr;
-        if (msg.status === "error") {
-          t += (msg.ename || "Error") + ": " + (msg.evalue || "");
+        if (out) {
+          out.hidden = false;
+          out.classList.remove("border-info", "text-info", "border-error", "bg-error/10", "text-error");
+          if (msg.status === "error") {
+            out.classList.add("border-error", "bg-error/10", "text-error");
+          }
+          let t = "";
+          if (msg.stdout) t += msg.stdout;
+          if (msg.stderr) t += msg.stderr;
+          if (msg.status === "error") t += (msg.ename || "Error") + ": " + (msg.evalue || "");
+          out.textContent = t || msg.status || "ok";
         }
-        if (!t) t = msg.status || "ok";
-        out.textContent = t;
         if (prompt && msg.execution_count != null) {
           prompt.textContent = "Out[" + msg.execution_count + "]:";
         }
@@ -68,16 +65,14 @@
         if (runBtn) runBtn.disabled = false;
       } else if (msg.type === "error") {
         setStatus(msg.text || "error", "err");
-        $all("button.run").forEach(function (b) {
-          b.disabled = false;
-        });
+        $all("button.run").forEach(function (b) { b.disabled = false; });
       } else if (msg.type === "chat.message") {
         const log = $("#chat-log");
         if (!log) return;
         const line = document.createElement("div");
-        line.className = "line";
+        line.className = "py-0.5";
         const who = document.createElement("span");
-        who.className = "who";
+        who.className = "font-code font-semibold text-primary mr-1";
         who.textContent = msg.from || "?";
         line.appendChild(who);
         line.appendChild(document.createTextNode(msg.text || ""));
@@ -97,12 +92,12 @@
       }
       run.disabled = true;
       setStatus("running", "run");
-      const cell = run.closest(".cell");
+      const cell = run.closest(".cell-row, .cell");
       const out = cell && $(".out-block", cell);
       if (out) {
         out.hidden = false;
-        out.classList.add("is-running");
-        out.classList.remove("is-error");
+        out.classList.remove("border-error", "bg-error/10", "text-error");
+        out.classList.add("border-info", "text-info");
         out.textContent = "…";
       }
       ws.send(JSON.stringify({ type: "exec.run", cell_id: id }));
@@ -111,10 +106,10 @@
 
     const mdToggle = e.target.closest("button.md-toggle");
     if (mdToggle) {
-      const cell = mdToggle.closest(".cell");
+      const cell = mdToggle.closest(".cell-row, .cell");
       if (!cell) return;
       const preview = $(".md-preview", cell);
-      const source = $(".code-well", cell);
+      const source = $("pre.code-well", cell);
       if (!preview || !source) return;
       const editing = mdToggle.dataset.mode === "edit";
       if (editing) {
@@ -143,9 +138,7 @@
           setStatus(r.ok ? "saved" : "save failed", r.ok ? "ok" : "err");
           if (r.ok) setTimeout(function () { setStatus("live", "ok"); }, 800);
         })
-        .catch(function () {
-          setStatus("save failed", "err");
-        });
+        .catch(function () { setStatus("save failed", "err"); });
     }
   });
 
@@ -154,7 +147,7 @@
     chatForm.addEventListener("submit", function (e) {
       e.preventDefault();
       const input = $("#chat-input");
-      const text = (input && input.value || "").trim();
+      const text = ((input && input.value) || "").trim();
       if (!text || !ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: "chat.send", text: text }));
       input.value = "";
@@ -162,7 +155,5 @@
   }
 
   if (path) connect();
-  if (kernelEl && cfg.kernel) {
-    kernelEl.textContent = cfg.kernel;
-  }
+  if (kernelEl && cfg.kernel) kernelEl.textContent = cfg.kernel;
 })();

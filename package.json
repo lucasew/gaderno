@@ -1,0 +1,12 @@
+{
+  "name": "gaderno",
+  "private": true,
+  "scripts": {
+    "build:css": "bunx @tailwindcss/cli -i ./styles/input.css -o ./internal/web/static/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.11",
+    "daisyui": "^5.6.16",
+    "tailwindcss": "^4.1.11"
+  }
+}

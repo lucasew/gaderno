@@ -1,63 +1,82 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="gaderno-light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ .Path }} — gaderno</title>
   <link rel="stylesheet" href="/static/app.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("gaderno-theme");
+        if (t === "gaderno-dark" || t === "gaderno-light") {
+          document.documentElement.setAttribute("data-theme", t);
+        } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "gaderno-dark");
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
-<body>
-  <header class="topbar">
-    <a class="topbar-brand" href="/">gaderno</a>
-    <span class="topbar-sep">·</span>
-    <span class="topbar-path" title="{{ .Path }}">{{ .Path }}</span>
-    <span class="topbar-spacer"></span>
-    <div class="topbar-meta">
-      <span class="pill" id="kernel-pill" title="Default kernelspec">kernel</span>
-      <span class="pill" id="status-pill" data-state="off">offline</span>
+<body class="min-h-screen bg-base-100 text-base-content text-sm pb-28">
+  <header class="navbar g-navbar sticky top-0 z-50 bg-base-200 border-b border-base-300 px-2 sm:px-3 gap-1 sm:gap-2">
+    <div class="navbar-start gap-1 min-w-0 flex-1">
+      <a href="/" class="btn btn-ghost btn-xs font-bold tracking-tight normal-case shrink-0">gaderno</a>
+      <span class="text-base-content/40 shrink-0">·</span>
+      <span class="font-code text-xs truncate min-w-0" title="{{ .Path }}">{{ .Path }}</span>
+    </div>
+    <div class="navbar-end gap-1 shrink-0">
+      <span class="badge badge-xs badge-ghost font-code" id="kernel-pill" title="Kernelspec">kernel</span>
+      <span class="badge badge-xs badge-ghost" id="status-pill" data-state="off">offline</span>
       <a class="btn btn-ghost btn-xs" href="/api/notebooks/{{ .Path }}?download=1">Export</a>
       <button type="button" class="btn btn-primary btn-xs" id="btn-save">Save</button>
+      <label class="swap swap-rotate btn btn-ghost btn-xs" title="Theme">
+        <input type="checkbox" class="theme-controller" value="gaderno-dark" id="theme-toggle" />
+        <span class="swap-off text-xs">☀</span>
+        <span class="swap-on text-xs">☾</span>
+      </label>
     </div>
   </header>
 
-  <main class="nb-main" id="cells">
-    {{ range $i, $c := .Cells }}
-    <article class="cell" data-cell-id="{{ $c.ID }}" data-cell-type="{{ $c.Type }}">
-      <div class="cell-gutter">
-        {{ if eq $c.Type "code" }}
-        <span class="prompt prompt-in">In&nbsp;[ ]:</span>
-        <span class="prompt prompt-out"></span>
+  <main class="py-1" id="cells">
+    {{ range .Cells }}
+    <article class="cell-row border-b border-base-300 px-2 py-1.5 hover:bg-base-200/40" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
+      <div class="flex flex-col items-end pt-1 gap-0.5 select-none">
+        {{ if eq .Type "code" }}
+        <span class="font-code text-[0.6875rem] tabular text-primary font-semibold prompt-in">In&nbsp;[ ]:</span>
+        <span class="font-code text-[0.6875rem] tabular text-base-content/50 prompt-out"></span>
         {{ else }}
-        <span class="prompt">Md</span>
+        <span class="font-code text-[0.6875rem] text-base-content/50">Md</span>
         {{ end }}
       </div>
-      <div class="cell-body">
-        <div class="cell-toolbar">
-          <span class="cell-type">{{ $c.Type }}</span>
-          {{ if eq $c.Type "code" }}
-          <button type="button" class="btn btn-primary btn-xs run" data-cell-id="{{ $c.ID }}">Run</button>
-          {{ else if eq $c.Type "markdown" }}
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-1 min-h-5 mb-0.5">
+          <span class="text-[0.625rem] uppercase tracking-wide text-base-content/50 font-semibold">{{ .Type }}</span>
+          {{ if eq .Type "code" }}
+          <button type="button" class="btn btn-primary btn-xs run" data-cell-id="{{ .ID }}">Run</button>
+          {{ else if eq .Type "markdown" }}
           <button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="preview">Edit</button>
           {{ end }}
         </div>
-        {{ if eq $c.Type "markdown" }}
-        <div class="md-preview">{{ $c.Source }}</div>
-        <pre class="code-well" hidden>{{ $c.Source }}</pre>
+        {{ if eq .Type "markdown" }}
+        <div class="md-preview prose prose-sm max-w-none text-sm">{{ .Source }}</div>
+        <pre class="code-well bg-base-200 border border-base-300 rounded-field p-2 mt-0.5" hidden>{{ .Source }}</pre>
         {{ else }}
-        <pre class="code-well">{{ $c.Source }}</pre>
-        <div class="out-block" hidden></div>
+        <pre class="code-well bg-base-200 border border-base-300 rounded-field p-2">{{ .Source }}</pre>
+        <div class="out-block mt-1 p-2 bg-base-100 border border-base-300 rounded-field font-code text-xs whitespace-pre-wrap break-words" hidden></div>
         {{ end }}
       </div>
     </article>
     {{ else }}
-    <p class="empty page">Empty notebook.</p>
+    <p class="text-xs text-base-content/50 p-3">Empty notebook.</p>
     {{ end }}
   </main>
 
-  <footer class="chat-strip">
-    <div class="chat-log" id="chat-log" aria-live="polite"></div>
-    <form class="chat-form" id="chat-form">
-      <input type="text" id="chat-input" placeholder="Session chat (not saved)" aria-label="Chat message" autocomplete="off">
+  <footer class="fixed bottom-0 inset-x-0 z-40 bg-base-100 border-t border-base-300 max-h-36 flex flex-col text-xs">
+    <div class="overflow-auto px-3 py-1 max-h-20 text-base-content/60" id="chat-log" aria-live="polite"></div>
+    <form class="flex gap-1.5 px-2 py-1.5 border-t border-base-300" id="chat-form">
+      <input type="text" id="chat-input" placeholder="Session chat (not saved)" aria-label="Chat message" autocomplete="off"
+        class="input input-bordered input-xs flex-1 min-w-0" />
       <button class="btn btn-xs" type="submit">Send</button>
     </form>
   </footer>
@@ -68,6 +87,7 @@
       kernel: {{ .KernelJSON }}
     };
   </script>
+  <script src="/static/theme.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

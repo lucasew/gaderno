@@ -1,3 +1,18 @@
 [tools]
 go = "1.26.4"
 uv = "0.11.26"
+bun = "1.3.14"
+
+[tasks.install]
+run = "go mod tidy && bun install"
+
+[tasks.codegen]
+description = "Rebuild embedded web CSS (daisyUI + Tailwind)"
+run = "bun run build:css"
+
+[tasks.format]
+run = "go fmt ./..."
+
+[tasks.ci]
+depends = ["codegen"]
+run = "go test ./... && go build -o /dev/null ./cmd/gaderno/"

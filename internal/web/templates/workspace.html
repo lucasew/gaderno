@@ -1,38 +1,67 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="gaderno-light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gaderno</title>
   <link rel="stylesheet" href="/static/app.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("gaderno-theme");
+        if (t === "gaderno-dark" || t === "gaderno-light") {
+          document.documentElement.setAttribute("data-theme", t);
+        } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "gaderno-dark");
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
-<body>
-  <header class="topbar">
-    <a class="topbar-brand" href="/">gaderno</a>
-    <span class="topbar-sep">·</span>
-    <span class="topbar-meta">workspace</span>
+<body class="min-h-screen bg-base-100 text-base-content text-sm">
+  <header class="navbar g-navbar sticky top-0 z-50 bg-base-200 border-b border-base-300 px-2 sm:px-3 gap-2">
+    <div class="navbar-start gap-1 min-w-0">
+      <a href="/" class="btn btn-ghost btn-xs font-bold tracking-tight normal-case">gaderno</a>
+      <span class="text-base-content/50 text-xs">workspace</span>
+    </div>
+    <div class="navbar-end gap-1">
+      <label class="swap swap-rotate btn btn-ghost btn-xs" title="Theme">
+        <input type="checkbox" class="theme-controller" value="gaderno-dark" id="theme-toggle" />
+        <span class="swap-off text-xs">☀</span>
+        <span class="swap-on text-xs">☾</span>
+      </label>
+    </div>
   </header>
-  <main class="page">
-    <h1 class="page-title">Notebooks</h1>
-    <p class="page-lead">Open a notebook or create one. Server owns state; kernels run on this host.</p>
+
+  <main class="p-3 sm:p-4 max-w-3xl">
+    <h1 class="text-lg font-semibold tracking-tight mb-1">Notebooks</h1>
+    <p class="text-xs text-base-content/60 mb-3">Open a notebook or create one. Server owns state; kernels run on this host.</p>
+
     {{ if .Notebooks }}
-    <table class="nb-table">
-      <thead>
-        <tr><th>Name</th></tr>
-      </thead>
-      <tbody>
-        {{ range .Notebooks }}
-        <tr><td><a href="/n/{{ . }}">{{ . }}</a></td></tr>
-        {{ end }}
-      </tbody>
-    </table>
+    <div class="overflow-x-auto border border-base-300 rounded-field">
+      <table class="table table-xs">
+        <thead>
+          <tr><th class="text-xs uppercase tracking-wide text-base-content/50 font-semibold">Name</th></tr>
+        </thead>
+        <tbody>
+          {{ range .Notebooks }}
+          <tr class="hover:bg-base-200">
+            <td class="font-code text-xs"><a class="link link-primary" href="/n/{{ . }}">{{ . }}</a></td>
+          </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
     {{ else }}
-    <p class="empty">No notebooks in this workspace yet.</p>
+    <p class="text-xs text-base-content/50 py-3">No notebooks in this workspace yet.</p>
     {{ end }}
-    <form class="create-row" method="post" action="/api/notebooks">
-      <input type="text" name="name" placeholder="name.ipynb" required aria-label="Notebook file name" autocomplete="off">
-      <button class="btn btn-primary" type="submit">Create</button>
+
+    <form class="flex flex-wrap gap-2 mt-3 items-center" method="post" action="/api/notebooks">
+      <input type="text" name="name" placeholder="name.ipynb" required aria-label="Notebook file name" autocomplete="off"
+        class="input input-bordered input-xs font-code flex-1 min-w-[10rem]" />
+      <button class="btn btn-primary btn-xs" type="submit">Create</button>
     </form>
   </main>
+  <script src="/static/theme.js" defer></script>
 </body>
 </html>
