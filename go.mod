@@ -8,6 +8,7 @@ require (
 	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
 	github.com/go-zeromq/zmq4 v0.17.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/reearth/ygo v1.31.6 // indirect

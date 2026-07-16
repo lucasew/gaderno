@@ -24,14 +24,17 @@ func init() {
 	serveCmd.Flags().String("root", "", "workspace root directory (env GADERNO_ROOT)")
 	serveCmd.Flags().String("listen", "", "listen address (env GADERNO_LISTEN)")
 	serveCmd.Flags().String("token", "", "shared access token (env GADERNO_TOKEN)")
+	serveCmd.Flags().String("kernel", "", "default kernelspec name (env GADERNO_KERNEL)")
 
 	_ = viper.BindPFlag("root", serveCmd.Flags().Lookup("root"))
 	_ = viper.BindPFlag("listen", serveCmd.Flags().Lookup("listen"))
 	_ = viper.BindPFlag("token", serveCmd.Flags().Lookup("token"))
+	_ = viper.BindPFlag("kernel", serveCmd.Flags().Lookup("kernel"))
 
 	viper.SetDefault("root", ".")
 	viper.SetDefault("listen", "127.0.0.1:8080")
 	viper.SetDefault("token", "")
+	viper.SetDefault("kernel", "python3")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -39,6 +42,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Root:   viper.GetString("root"),
 		Listen: viper.GetString("listen"),
 		Token:  viper.GetString("token"),
+		Kernel: viper.GetString("kernel"),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

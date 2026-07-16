@@ -8,13 +8,13 @@ import (
 
 // ExecuteResult is a simplified view of one execute call.
 type ExecuteResult struct {
-	MsgID          string
-	Status         string // ok | error | abort
-	ExecutionCount int
-	Stdout         string
-	Stderr         string
-	Ename          string
-	Evalue         string
+	MsgID          string `json:"msg_id"`
+	Status         string `json:"status"` // ok | error | abort
+	ExecutionCount int    `json:"execution_count"`
+	Stdout         string `json:"stdout"`
+	Stderr         string `json:"stderr"`
+	Ename          string `json:"ename"`
+	Evalue         string `json:"evalue"`
 }
 
 // Execute runs code on the kernel and collects IOPub until idle for this msg.
