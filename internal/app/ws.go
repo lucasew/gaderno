@@ -24,6 +24,7 @@ type wsControl struct {
 	Type   string `json:"type"`
 	CellID string `json:"cell_id,omitempty"`
 	Text   string `json:"text,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) {
@@ -44,7 +45,6 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 		defer hub.RemoveClient(clientID)
 		defer conn.Close()
 
-		// Server → client writer
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -60,7 +60,6 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 			}
 		}()
 
-		// Kick yjs sync: send our SyncStep1 so client can reply
 		step1 := hub.EncodeSyncStep1()
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		_ = conn.WriteMessage(websocket.BinaryMessage, step1)
@@ -105,16 +104,36 @@ func handleControl(r *http.Request, hub *session.Hub, client *session.Client, ct
 		default:
 		}
 	case "chat.send":
-		// RAM-only chat fanout
 		b, _ := json.Marshal(map[string]string{
 			"type": "chat.message",
 			"text": ctrl.Text,
 			"from": client.ID[:8],
 		})
-		// broadcast including sender
 		hub.BroadcastJSON(b, "")
+	case "cell.set_source":
+		if ctrl.CellID == "" {
+			sendErr(client, "cell_id required")
+			return
+		}
+		if err := hub.SetCellSource(ctrl.CellID, ctrl.Source); err != nil {
+			sendErr(client, err.Error())
+			return
+		}
+		// ack originator (synced to server memory)
+		b, _ := json.Marshal(map[string]any{
+			"type":    "cell.source_ack",
+			"cell_id": ctrl.CellID,
+		})
+		select {
+		case client.Out <- session.Outbound{Data: b}:
+		default:
+		}
 	case "exec.run":
 		go func() {
+			// Optional: apply source from client if provided (flush-before-run)
+			if ctrl.Source != "" && ctrl.CellID != "" {
+				_ = hub.SetCellSource(ctrl.CellID, ctrl.Source)
+			}
 			ctx := r.Context()
 			if err := hub.EnsureKernel(ctx, ""); err != nil {
 				sendErr(client, err.Error())

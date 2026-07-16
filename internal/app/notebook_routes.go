@@ -35,16 +35,20 @@ func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Re
 			}
 		}
 		type cellView struct {
-			Type   string
-			ID     string
-			Source string
+			Type       string
+			ID         string
+			Source     string
+			SourceJSON template.JS
 		}
 		var cells []cellView
 		for _, c := range nb.Cells {
+			src := c.SourceString()
+			raw, _ := json.Marshal(src)
 			cells = append(cells, cellView{
-				Type:   string(c.CellType),
-				ID:     c.ID,
-				Source: c.SourceString(),
+				Type:       string(c.CellType),
+				ID:         c.ID,
+				Source:     src,
+				SourceJSON: template.JS(raw),
 			})
 		}
 		pathJSON, _ := json.Marshal(path)

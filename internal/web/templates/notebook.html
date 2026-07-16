@@ -40,8 +40,8 @@
 
   <main class="py-1" id="cells">
     {{ range .Cells }}
-    <article class="cell-row border-b border-base-300 px-2 py-1.5 hover:bg-base-200/40" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
-      <div class="flex flex-col items-end pt-1 gap-0.5 select-none">
+    <article class="cell-row border-b border-base-300 px-2 py-2 hover:bg-base-200/40" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
+      <div class="flex flex-col items-end pt-2 gap-0.5 select-none">
         {{ if eq .Type "code" }}
         <span class="font-code text-[0.6875rem] tabular text-primary font-semibold prompt-in">In&nbsp;[ ]:</span>
         <span class="font-code text-[0.6875rem] tabular text-base-content/50 prompt-out"></span>
@@ -50,20 +50,26 @@
         {{ end }}
       </div>
       <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-1 min-h-5 mb-0.5">
+        <div class="flex flex-wrap items-center gap-1 min-h-5 mb-1">
           <span class="text-[0.625rem] uppercase tracking-wide text-base-content/50 font-semibold">{{ .Type }}</span>
           {{ if eq .Type "code" }}
           <button type="button" class="btn btn-primary btn-xs run" data-cell-id="{{ .ID }}">Run</button>
           {{ else if eq .Type "markdown" }}
-          <button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="preview">Edit</button>
+          <button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="edit">Preview</button>
           {{ end }}
         </div>
         {{ if eq .Type "markdown" }}
-        <div class="md-preview prose prose-sm max-w-none text-sm">{{ .Source }}</div>
-        <pre class="code-well bg-base-200 border border-base-300 rounded-field p-2 mt-0.5" hidden>{{ .Source }}</pre>
-        {{ else }}
-        <pre class="code-well bg-base-200 border border-base-300 rounded-field p-2">{{ .Source }}</pre>
-        <div class="out-block mt-1 p-2 bg-base-100 border border-base-300 rounded-field font-code text-xs whitespace-pre-wrap break-words" hidden></div>
+        <div class="md-preview text-sm whitespace-pre-wrap" hidden></div>
+        {{ end }}
+        <script type="application/json" class="cell-source-json" data-cell-id="{{ .ID }}">{{ .SourceJSON }}</script>
+        <div
+          class="cm-host"
+          data-gaderno-editor
+          data-cell-id="{{ .ID }}"
+          data-lang="{{ if eq .Type "markdown" }}markdown{{ else }}python{{ end }}"
+        ></div>
+        {{ if eq .Type "code" }}
+        <div class="out-block mt-1.5 p-2 bg-base-100 border border-base-300 rounded-field font-code text-xs whitespace-pre-wrap break-words" hidden></div>
         {{ end }}
       </div>
     </article>
@@ -88,6 +94,6 @@
     };
   </script>
   <script src="/static/theme.js" defer></script>
-  <script src="/static/app.js" defer></script>
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>

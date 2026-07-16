@@ -125,6 +125,11 @@ func (h *Hub) EnsureKernel(ctx context.Context, name string) error {
 	return nil
 }
 
+// SetCellSource updates cell source in the CRDT (debounced save via OnUpdate).
+func (h *Hub) SetCellSource(cellID, source string) error {
+	return h.Doc.SetSourceServer(cellID, source)
+}
+
 // ExecuteCell runs a cell by id.
 func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteResult, error) {
 	h.mu.Lock()

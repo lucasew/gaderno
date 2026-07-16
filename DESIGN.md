@@ -17,5 +17,10 @@ Cobalt primary (~250° OKLCH). Pure white base in light. Dense radii (`0.25rem`)
 - `btn-xs`, `input-xs`, `table-xs`, `badge-xs`
 - Cell grid with In/Out prompts; hairline borders not large cards
 
+## Editor
+- **CodeMirror 6** (`web/editor/main.js` → `bun run build:js` → `static/editor.js`)
+- Python + markdown languages; min height ~8.5rem for code
+- Debounced `cell.set_source` over WS; Run flushes source then `exec.run`
+
 ## Motion
 Minimal; theme toggle only.

@@ -7,8 +7,8 @@ bun = "1.3.14"
 run = "go mod tidy && bun install"
 
 [tasks.codegen]
-description = "Rebuild embedded web CSS (daisyUI + Tailwind)"
-run = "bun run build:css"
+description = "Rebuild embedded web CSS and CodeMirror bundle"
+run = "bun run build"
 
 [tasks.format]
 run = "go fmt ./..."

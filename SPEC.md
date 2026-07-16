@@ -14,7 +14,7 @@ This document is the **product and architecture specification**. It is not a sty
 
 ## Overview
 
-**gaderno** (Portuguese *caderno* = notebook + Go) is a collaborative notebook server written in Go. It reuses real Jupyter kernels (kernelspecs + ZMQ messaging protocol). The browser is a thin client: CodeMirror for typing, Yjs for optimistic text, and a single WebSocket to a server that holds the canonical live document.
+**gaderno** (Portuguese *caderno* = notebook + Go) is a collaborative notebook server written in Go. It reuses real Jupyter kernels (kernelspecs + ZMQ messaging protocol) and can optionally synthesize **uv**-backed Python kernels (same idea as `uv-jupyter-kernel`) when only `uv` is installed. The browser is a thin client: CodeMirror for typing, Yjs for optimistic text, and a single WebSocket to a server that holds the canonical live document.
 
 The live document is a **Yjs-compatible CRDT** held in server memory via **[ygo](https://github.com/reearth/ygo)** (pure Go, no CGO). Clients follow the server for everything except speculative text editing. On disk there is **only `.ipynb`**. If the server dies before your changes are acked, those changes are gone.
 
@@ -37,7 +37,7 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 ### Goals (v1)
 
 1. Live multi-client co-editing of notebooks (source + structure + shared outputs).
-2. Real Jupyter kernels via standard kernelspecs and protocol 5.x over ZMQ.
+2. Real Jupyter kernels via standard kernelspecs and protocol 5.x over ZMQ, plus **optional synthetic uv kernels** when `uv` is available (no pre-installed ipykernel required for that path).
 3. Server is king: clients are followers except for optimistic text speculation.
 4. CRDT document in server RAM via **ygo**; browser **Yjs** speaks the same update protocol.
 5. Single WebSocket for CRDT, exec, presence, chat, and view messages.
@@ -48,6 +48,7 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 10. Pure Go preferred: ygo + pure-Go ZMQ (`go-zeromq/zmq4`); no CGO required for the default path.
 11. Release packaging via **GoReleaser** (multi-OS binaries, checksums, GitHub releases).
 12. Kernel discovery initially **mirrors Jupyter’s kernelspec path rules** in Go (no required `jupyter` CLI).
+13. **uv-backed Python envs (optional):** if `uv` is on `PATH`, expose synthetic kernels from `uv python list` (embedded semantics of `uv-jupyter-kernel`); picker groups **Jupyter** vs **uv**. No silent default-kernel autostart.
 
 ### Non-Goals (v1)
 
@@ -98,6 +99,18 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | 21 | **Structure/authority:** anyone may propose any doc change; **server may reject** (drop/not relay, error to originator). |
 | 22 | **Keyboard UX (v1):** no custom hotkey scheme; at most basic focusable controls (tab order, buttons, native focus). |
 | 23 | **CLI:** Cobra + Viper; room to grow (`serve`, `version` now). **No config file.** Flags override env. Env prefix `GADERNO_`. |
+| 24 | **uv synthetic kernels (MVP):** optional; if `uv` missing or `uv python list` fails, omit the **uv** picker group. Never hard-require `uv` to serve. |
+| 25 | **uv catalog:** on first need, `sync.Once` runs `uv python list`; **dedupe first-column keys**; **no kind filter** (CPython/PyPy/Graal/freethreaded/…). Process-lifetime cache (no mid-run refresh in v1). |
+| 26 | **Synthetic kernelspecs are in-memory only** — do not write `kernel.json` under Jupyter data dirs. Real on-disk kernelspecs never overridden by synthetics (same name → real wins). |
+| 27 | **Persisted name shape:** `uv-<implementation>-<version>[-variant]` (e.g. `uv-cpython-3.13.7`, freethreaded suffix when needed). Do **not** bake OS/arch into the notebook’s `kernelspec.name`. |
+| 28 | **uv spawn argv** matches `uv-jupyter-kernel`: `uv run --python <request> --with ipykernel --with pyzmq --no-project --isolated --refresh python -m ipykernel_launcher -f {connection_file}` (`PATH` includes uv’s directory). |
+| 29 | **No default-kernel autostart.** Do not boot a kernel merely because a notebook opened or a global default exists. |
+| 30 | **Session join:** if a live session already exists for the notebook path, clients **join it** (kernel state as-is). |
+| 31 | **Fresh session selection:** if ipynb `kernelspec.name` is set **and resolvable** (Jupyter discovery or uv catalog) → **bind** that name; else session enters **`NeedsKernel`** (chooser). Unresolvable metadata → chooser, not a silent fallback. |
+| 32 | **Lazy idempotent spawn:** process starts on **first Run** (or equivalent exec) after a kernelspec is bound; open/chooser confirm only bind. Concurrent first-runs share one spawn. |
+| 33 | **`NeedsKernel` blocks exec only** — edit, chat, save, awareness still work. Multi-client: session-level chooser; first valid pick wins; all clients see the same bound name. |
+| 34 | **Switch kernel:** kill old process if any; clear exec queue; rebind; next Run spawns the new spec (lazy). |
+| 35 | **Persist kernelspec into ipynb only after successful spawn** (not on bind alone). |
 
 ---
 
@@ -111,6 +124,9 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | **Hub** | Per-notebook actor: serializes server-side mutations, owns kernel IOPub apply, fans out WS. |
 | **Server ack** | Update accepted into server ygo (and will be relayed). Powers “Synced” UI. |
 | **Disk flush** | Debounced write of `.ipynb`. Not what “Synced” means in v1. |
+| **NeedsKernel** | Session state: no resolvable bound kernelspec yet; exec disabled until user picks one. |
+| **Synthetic kernelspec** | In-memory kernelspec (uv group) not installed under Jupyter’s kernel dirs. |
+| **Bound kernelspec** | Session-selected kernel name ready for lazy spawn; process may not be running yet. |
 
 ---
 
@@ -190,12 +206,26 @@ flowchart TB
 
 **Decision:** One kernel process per live notebook session.
 
+#### Session open & kernel selection
+
+1. If a **live session** already exists for this notebook path → **join it** (ygo + clients + whatever kernel state it has). Do not re-select or re-spawn.
+2. Else create a **fresh session**:
+   - If ipynb `metadata.kernelspec.name` is set **and that name is available** (real Jupyter kernelspec **or** uv synthetic) → **bind** it; session is Idle with a bound spec (process **not** started yet).
+   - Else → **`NeedsKernel`**: show kernel chooser (all clients share this session state). Exec is disabled until a pick is bound.
+3. **No silent default** (do not invent `python3` or first uv entry when metadata is missing/unresolvable). That is an intentional break from Jupyter clients that always start a default kernel on open.
+4. Kernel picker UI **groups**:
+   - **Jupyter** — discovered on-disk kernelspecs.
+   - **uv** — synthetic entries from `uv python list` (group omitted entirely if `uv` is missing or list fails).
+5. Multi-client: **`NeedsKernel` is session-level**. First valid selection wins; others observe the bound name. Edit/chat/save remain available without a kernel.
+
 #### Lifecycle
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Idle: Session created, no kernel
-  Idle --> Starting: first execute or explicit start
+  [*] --> NeedsKernel: fresh session, no resolvable kernelspec
+  [*] --> Idle: fresh session, metadata name available (bound, not started)
+  NeedsKernel --> Idle: user selects available kernelspec
+  Idle --> Starting: first execute (idempotent spawn)
   Starting --> Ready: kernel_info_reply + hb OK
   Starting --> Dead: spawn/connect failure
   Ready --> Busy: execute_request in flight
@@ -204,17 +234,27 @@ stateDiagram-v2
   Busy --> Restarting: restart
   Ready --> Dead: shutdown
   Restarting --> Starting
-  Dead --> Starting: user start
+  Dead --> Starting: first execute after recovery
+  Idle --> Idle: switch kernelspec (kill old if any; rebind; still no process until execute)
+  Ready --> Idle: switch kernelspec (kill process; rebind)
+  Busy --> Idle: switch kernelspec (kill process; rebind)
+  NeedsKernel --> NeedsKernel: pick unavailable (stay)
 ```
 
 #### Spawn algorithm
 
-1. Resolve kernelspec by name via **Jupyter-compatible discovery** (below); default `python3` from notebook metadata or config.
-2. Allocate five free TCP ports; write connection file (mode 0600).
-3. Expand kernelspec `argv`; `exec.Command` with cwd = notebook directory.
-4. Connect as ZMQ client with pure-Go `github.com/go-zeromq/zmq4` — **IOPub SUB first** (see wire section).
-5. Heartbeat + IOPub loops owned by kernel adapter.
-6. `kernel_info_request`; Ready only after reply.
+Spawn is **lazy and idempotent**: only the first execute (Run) after a successful bind starts the process. Concurrent execute requests share one in-flight spawn.
+
+1. Require a **bound** kernelspec name; if none → reject exec (`NeedsKernel` / chooser).
+2. Resolve name via **unified discovery** (Jupyter paths + optional uv synthetics below).
+3. Allocate five free TCP ports; write connection file (mode 0600).
+4. Expand kernelspec `argv`; `exec.Command` with cwd = notebook directory.
+5. Connect as ZMQ client with pure-Go `github.com/go-zeromq/zmq4` — **IOPub SUB first** (see wire section).
+6. Heartbeat + IOPub loops owned by kernel adapter.
+7. `kernel_info_request`; Ready only after reply.
+8. On **successful** spawn: update notebook `metadata.kernelspec` (and language_info when known) for the next fresh open. **Do not** write kernelspec metadata on bind alone or after failed spawn.
+
+**Switch kernelspec:** kill the old kernel process if running; clear the exec queue; bind the new name; remain without a process until the next execute.
 
 #### Kernel discovery (copy Jupyter)
 
@@ -230,7 +270,41 @@ Each subdirectory with a `kernel.json` is a kernelspec. **Same name:** first mat
 
 Optional later: shell-out to `jupyter kernelspec list --json` as a debug fallback — **not** required for MVP.
 
-`uv` in `mise.toml` remains for **dev/test** ipykernel installs, not for production discovery.
+#### uv synthetic kernels (MVP, optional)
+
+Embedded equivalent of [`uv-jupyter-kernel`](./uv-jupyter-kernel): provision a Python+ipykernel environment when only **`uv`** is available. **Synthetics are not installed** as on-disk kernelspecs.
+
+**Availability**
+
+- Resolve `uv` via `PATH` (`exec.LookPath`).
+- If missing or `uv python list` fails: **no uv group** in the chooser; Jupyter discovery unchanged; `gaderno serve` still starts.
+- Catalog load: **`sync.Once` on first need** (chooser render or “is this name available?”). No TTL refresh in v1; new interpreters require process restart to appear.
+
+**Catalog construction**
+
+1. Run `uv python list` (prefer `--output-format json` if stable; text parse of first column is acceptable).
+2. Take the **first column / `key`**, **deduplicated** (same key with multiple paths → one entry).
+3. **No filter** on implementation/variant (include downloadable rows, freethreaded, PyPy, GraalPy, etc.).
+4. Map each unique key to a synthetic kernelspec:
+   - **Name** (stable, portable): `uv-<implementation>-<version>` plus variant suffix when not default (e.g. `uv-cpython-3.13.7`, `uv-cpython-3.14.6-freethreaded`). Strip platform/arch/libc from the persisted name.
+   - **display_name**: human-facing label (may show full key / download affordance in UI).
+   - **language**: `python` (or best-effort from implementation).
+   - **argv / env**: same shape as `uv-jupyter-kernel` (below).
+5. **Name collision:** a real on-disk kernelspec with the same `name` wins; do not replace it with a synthetic.
+
+**argv (normative, match uv-jupyter-kernel)**
+
+```text
+<uv> run --python <request> --with ipykernel --with pyzmq --no-project --isolated --refresh \
+  python -m ipykernel_launcher -f {connection_file}
+```
+
+- `<uv>` = absolute path to the `uv` binary.
+- `<request>` = a Python request uv accepts for that entry (version / `cpython@…` / full list key — implementer picks any form uv resolves for the catalog entry).
+- `env.PATH` prepends the directory containing `uv` (same idea as uv-jupyter-kernel’s `${PATH}` join).
+- First start may **download** a Python build via uv; treat spawn timeout generously enough for cold download (document default; allow override later).
+
+`uv` in `mise.toml` remains useful for **dev/test**, but production discovery of the **uv group** is the live `uv python list` catalog above — not a static version list in gaderno config.
 
 #### Channels
 
@@ -469,6 +543,9 @@ type NotebookStore interface {
 - Open workspace, list/create ipynb.
 - Multi-client Yjs text + structure co-edit via ygo.
 - Server-written outputs from ipykernel execute/interrupt/restart.
+- Kernel selection: join existing session; else bind resolvable `kernelspec.name` or **`NeedsKernel` chooser**; **lazy idempotent spawn on first Run**; no default autostart.
+- Optional **uv synthetic kernels** (`uv python list` + uv-jupyter-kernel argv); picker groups **Jupyter** | **uv**.
+- Persist `kernelspec` metadata only after successful spawn.
 - Awareness cursors; session chat; sync status = server ack.
 - Save ipynb with stable cell ids.
 - Token/loopback safety.
@@ -633,7 +710,9 @@ Large outputs: cap+truncate. Structure: anyone proposes; server may reject.
 
 | Failure | Behavior |
 |---------|----------|
-| Kernel spawn fail | Dead; banner; no run |
+| Kernel spawn fail | Dead; banner; no run; do not persist kernelspec |
+| No bound kernelspec (`NeedsKernel`) | Exec rejected; chooser; edit/chat/save OK |
+| uv missing / list fail | Omit uv picker group; Jupyter path unchanged |
 | HB death | Dead; clear queue; source kept |
 | Disk write fail | Warn; Synced still means RAM ack |
 | WS drop | Kernel continues; client resyncs |
@@ -651,6 +730,8 @@ Large outputs: cap+truncate. Structure: anyone proposes; server may reject.
 - go-zeromq/zmq4: https://github.com/go-zeromq/zmq4
 - GoNB: https://github.com/janpfeifer/gonb
 - Idiomorph (if used for non-editor HTML): https://github.com/bigskysoftware/idiomorph
+- uv: https://github.com/astral-sh/uv
+- In-repo reference: `uv-jupyter-kernel/` (semantics for synthetic uv kernels)
 
 ---
 
@@ -671,11 +752,13 @@ Large outputs: cap+truncate. Structure: anyone proposes; server may reject.
 13. **No CGO** on the default path (ygo + go-zeromq/zmq4).
 14. **GoReleaser** ships **binaries + checksums only** on GitHub Releases (no Homebrew tap; config from existing examples, not an empty stub).
 15. **Kernelspec discovery copies Jupyter’s path rules** in Go; no `jupyter` CLI dependency.
-16. **Markdown cells:** toggle edit (CM) ↔ server-sanitized HTML preview.
-17. **Large outputs:** v1 = cap and truncate only; blob system later.
-18. **Doc mutations:** everyone may propose any change; **server may reject** (outputs/exec fields always rejected from clients).
-19. **No custom hotkeys in v1** — buttons and basic focusable controls only (native tab/focus).
-20. **CLI: Cobra + Viper** — flags override env; no config file; `GADERNO_` env prefix.
+16. **Optional uv synthetic kernels** — `uv python list` (Once), grouped picker, uv-jupyter-kernel argv; uv not required to serve.
+17. **No default-kernel autostart**; **NeedsKernel** when metadata missing/unresolvable; join live session by path; **lazy spawn on first Run**; persist kernelspec only after successful spawn; switch kills old kernel.
+18. **Markdown cells:** toggle edit (CM) ↔ server-sanitized HTML preview.
+19. **Large outputs:** v1 = cap and truncate only; blob system later.
+20. **Doc mutations:** everyone may propose any change; **server may reject** (outputs/exec fields always rejected from clients).
+21. **No custom hotkeys in v1** — buttons and basic focusable controls only (native tab/focus).
+22. **CLI: Cobra + Viper** — flags override env; no config file; `GADERNO_` env prefix.
 
 ---
 
@@ -685,7 +768,7 @@ Large outputs: cap+truncate. Structure: anyone proposes; server may reject.
 - **Do not ship (v1 packaging):** Homebrew tap, AUR, nix flake, Docker image with kernels.
 - Config: `.goreleaser.yaml` adapted from **existing GoReleaser examples** the author already uses elsewhere — not a greenfield stub checked in “empty for later.”
 - CGO: `CGO_ENABLED=0` for release builds (ygo + pure-Go ZMQ).
-- Kernels are **not** bundled; host must provide kernelspecs (e.g. ipykernel).
+- Kernels are **not** bundled. Host provides classic kernelspecs **and/or** `uv` on `PATH` for the synthetic uv group (ipykernel pulled ephemerally via `uv run --with`).
 - Trigger: git tags when CI/release workflow is wired; not required for MVP coding.
 
 ---
@@ -718,15 +801,18 @@ Ordered increments from empty repo. Toolchain: Go **1.26.4** (mise).
 
 ### PR 07b — kernel spawn
 - Jupyter-compatible kernelspec path discovery (no CLI), ZMQ connect order, hb, execute, `kernel_ping.sh`
+- Optional uv synthetic catalog (`uv python list` + Once), argv matching uv-jupyter-kernel, smoke with `uv` only
 
 ### PR 08 — session hub
 - Open notebook → ygo from ipynb; exec queue; server output transactions; mock kernel tests
+- Session join by path; bind vs **NeedsKernel**; lazy idempotent spawn on first execute; persist kernelspec after successful spawn; switch kills old kernel
 
 ### PR 09 — WebSocket sync
 - Yjs bridge, exec frames, awareness pass-through, chat buffer, sync status
 
 ### PR 10a — Notebook UI SSR + outputs render
 - Page shell, client render from CRDT / view.html, no CM yet
+- Kernel picker with **Jupyter** / **uv** groups; `NeedsKernel` chrome (exec disabled until bound)
 
 ### PR 10b — CodeMirror + Y.Text + flush-before-run
 - Editor binding, Synced indicator, multi-client typing

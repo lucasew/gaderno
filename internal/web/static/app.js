@@ -1,4 +1,5 @@
-/* gaderno notebook client — buttons only, no custom hotkeys */
+import { mountEditors } from "./editor.js";
+
 (function () {
   "use strict";
 
@@ -14,6 +15,11 @@
   const statusEl = $("#status-pill");
   const kernelEl = $("#kernel-pill");
 
+  // Debounce timers per cell
+  const pending = new Map();
+  let api = null;
+  let ws = null;
+
   function setStatus(text, state) {
     if (!statusEl) return;
     statusEl.textContent = text;
@@ -24,37 +30,88 @@
     else statusEl.classList.add("badge-ghost");
   }
 
-  let ws;
+  function sendJSON(obj) {
+    if (!ws || ws.readyState !== 1) return false;
+    ws.send(JSON.stringify(obj));
+    return true;
+  }
+
+  function flushSource(cellId) {
+    if (!api) return "";
+    const source = api.getSource(cellId);
+    sendJSON({ type: "cell.set_source", cell_id: cellId, source: source });
+    const t = pending.get(cellId);
+    if (t) {
+      clearTimeout(t);
+      pending.delete(cellId);
+    }
+    return source;
+  }
+
+  function scheduleSource(cellId, source) {
+    setStatus("editing…", "run");
+    const prev = pending.get(cellId);
+    if (prev) clearTimeout(prev);
+    pending.set(
+      cellId,
+      setTimeout(function () {
+        pending.delete(cellId);
+        if (sendJSON({ type: "cell.set_source", cell_id: cellId, source: source })) {
+          // ack updates status
+        }
+      }, 200)
+    );
+  }
+
   function connect() {
     if (!path) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(proto + "://" + location.host + "/ws/notebooks/" + path);
     ws.binaryType = "arraybuffer";
-    ws.onopen = function () { setStatus("live", "ok"); };
+    ws.onopen = function () {
+      setStatus("live", "ok");
+    };
     ws.onclose = function () {
       setStatus("offline", "off");
       setTimeout(connect, 1500);
     };
-    ws.onerror = function () { setStatus("error", "err"); };
+    ws.onerror = function () {
+      setStatus("error", "err");
+    };
     ws.onmessage = function (ev) {
       if (typeof ev.data !== "string") return;
       let msg;
-      try { msg = JSON.parse(ev.data); } catch (_) { return; }
-      if (msg.type === "exec.result") {
-        const cell = document.querySelector('.cell-row[data-cell-id="' + msg.cell_id + '"], .cell[data-cell-id="' + msg.cell_id + '"]');
+      try {
+        msg = JSON.parse(ev.data);
+      } catch (_) {
+        return;
+      }
+      if (msg.type === "cell.source_ack") {
+        setStatus("live", "ok");
+      } else if (msg.type === "exec.result") {
+        const cell = document.querySelector(
+          '.cell-row[data-cell-id="' + msg.cell_id + '"]'
+        );
         if (!cell) return;
         const out = $(".out-block", cell);
         const prompt = $(".prompt-out", cell);
         if (out) {
           out.hidden = false;
-          out.classList.remove("border-info", "text-info", "border-error", "bg-error/10", "text-error");
+          out.classList.remove(
+            "border-info",
+            "text-info",
+            "border-error",
+            "bg-error/10",
+            "text-error"
+          );
           if (msg.status === "error") {
             out.classList.add("border-error", "bg-error/10", "text-error");
           }
           let t = "";
           if (msg.stdout) t += msg.stdout;
           if (msg.stderr) t += msg.stderr;
-          if (msg.status === "error") t += (msg.ename || "Error") + ": " + (msg.evalue || "");
+          if (msg.status === "error")
+            t += (msg.ename || "Error") + ": " + (msg.evalue || "");
           out.textContent = t || msg.status || "ok";
         }
         if (prompt && msg.execution_count != null) {
@@ -65,7 +122,9 @@
         if (runBtn) runBtn.disabled = false;
       } else if (msg.type === "error") {
         setStatus(msg.text || "error", "err");
-        $all("button.run").forEach(function (b) { b.disabled = false; });
+        $all("button.run").forEach(function (b) {
+          b.disabled = false;
+        });
       } else if (msg.type === "chat.message") {
         const log = $("#chat-log");
         if (!log) return;
@@ -82,6 +141,11 @@
     };
   }
 
+  // Mount editors
+  api = mountEditors(document.getElementById("cells") || document, {
+    onChange: scheduleSource,
+  });
+
   document.addEventListener("click", function (e) {
     const run = e.target.closest("button.run");
     if (run) {
@@ -92,7 +156,8 @@
       }
       run.disabled = true;
       setStatus("running", "run");
-      const cell = run.closest(".cell-row, .cell");
+      const source = flushSource(id);
+      const cell = run.closest(".cell-row");
       const out = cell && $(".out-block", cell);
       if (out) {
         out.hidden = false;
@@ -100,45 +165,58 @@
         out.classList.add("border-info", "text-info");
         out.textContent = "…";
       }
-      ws.send(JSON.stringify({ type: "exec.run", cell_id: id }));
+      // flush source on run so kernel sees latest
+      sendJSON({ type: "exec.run", cell_id: id, source: source });
       return;
     }
 
     const mdToggle = e.target.closest("button.md-toggle");
     if (mdToggle) {
-      const cell = mdToggle.closest(".cell-row, .cell");
-      if (!cell) return;
+      const cell = mdToggle.closest(".cell-row");
+      if (!cell || !api) return;
+      const id = cell.getAttribute("data-cell-id");
       const preview = $(".md-preview", cell);
-      const source = $("pre.code-well", cell);
-      if (!preview || !source) return;
+      const host = $("[data-gaderno-editor]", cell);
+      if (!preview || !host) return;
       const editing = mdToggle.dataset.mode === "edit";
       if (editing) {
+        // switch to preview
         mdToggle.dataset.mode = "preview";
         mdToggle.textContent = "Edit";
-        source.hidden = true;
+        preview.textContent = api.getSource(id);
         preview.hidden = false;
+        host.hidden = true;
       } else {
         mdToggle.dataset.mode = "edit";
         mdToggle.textContent = "Preview";
-        source.hidden = false;
         preview.hidden = true;
+        host.hidden = false;
+        api.focus(id);
       }
       return;
     }
 
     const save = e.target.closest("#btn-save");
     if (save) {
+      // flush all editors first
+      $all("[data-gaderno-editor]").forEach(function (host) {
+        flushSource(host.getAttribute("data-cell-id"));
+      });
       setStatus("saving", "run");
-      fetch("/api/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: path }),
-      })
-        .then(function (r) {
-          setStatus(r.ok ? "saved" : "save failed", r.ok ? "ok" : "err");
-          if (r.ok) setTimeout(function () { setStatus("live", "ok"); }, 800);
+      setTimeout(function () {
+        fetch("/api/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: path }),
         })
-        .catch(function () { setStatus("save failed", "err"); });
+          .then(function (r) {
+            setStatus(r.ok ? "saved" : "save failed", r.ok ? "ok" : "err");
+            if (r.ok) setTimeout(function () { setStatus("live", "ok"); }, 800);
+          })
+          .catch(function () {
+            setStatus("save failed", "err");
+          });
+      }, 50);
     }
   });
 
@@ -149,7 +227,7 @@
       const input = $("#chat-input");
       const text = ((input && input.value) || "").trim();
       if (!text || !ws || ws.readyState !== 1) return;
-      ws.send(JSON.stringify({ type: "chat.send", text: text }));
+      sendJSON({ type: "chat.send", text: text });
       input.value = "";
     });
   }
