@@ -30,6 +30,9 @@
       <span class="badge badge-xs badge-ghost" id="status-pill" data-state="off">offline</span>
       <a class="btn btn-ghost btn-xs" href="/api/notebooks/{{ .Path }}?download=1">Export</a>
       <button type="button" class="btn btn-primary btn-xs" id="btn-save">Save</button>
+      <button type="button" class="btn btn-ghost btn-xs" id="btn-chat" aria-controls="chat-rail" aria-expanded="false" title="Toggle chat sidebar">
+        Chat
+      </button>
       <label class="swap swap-rotate btn btn-ghost btn-xs" title="Theme">
         <input type="checkbox" class="theme-controller" value="gaderno-dark" id="theme-toggle" />
         <span class="swap-off text-xs">☀</span>
@@ -38,7 +41,7 @@
     </div>
   </header>
 
-  <div class="flex flex-1 min-h-0">
+  <div class="flex flex-1 min-h-0 relative">
     <main class="flex-1 min-w-0 overflow-y-auto py-1" id="cells">
       {{ range .Cells }}
       <article class="cell-row border-b border-base-300 px-2 py-2 hover:bg-base-200/40" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
@@ -79,17 +82,31 @@
       {{ end }}
     </main>
 
-    <aside class="chat-rail shrink-0 flex flex-col border-l border-base-300 bg-base-200/40 w-56 sm:w-64 lg:w-72" aria-label="Session chat">
-      <div class="shrink-0 px-2 py-1.5 border-b border-base-300 flex items-center justify-between gap-1">
-        <span class="text-[0.625rem] uppercase tracking-wide font-semibold text-base-content/50">Chat</span>
-        <span class="text-[0.625rem] text-base-content/40">session · not saved</span>
+    {{/* Collapsible right sidebar (Docs-style panel) */}}
+    <aside
+      id="chat-rail"
+      class="chat-rail"
+      data-open="false"
+      aria-label="Session chat"
+      aria-hidden="true"
+    >
+      <div class="chat-rail-inner flex flex-col h-full min-h-0 bg-base-200/50 border-l border-base-300">
+        <div class="shrink-0 h-9 px-2 border-b border-base-300 flex items-center justify-between gap-1">
+          <div class="min-w-0">
+            <div class="text-xs font-semibold leading-tight">Chat</div>
+            <div class="text-[0.625rem] text-base-content/45 leading-tight">Session only · not saved</div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-xs btn-square" id="btn-chat-close" aria-label="Close chat sidebar" title="Close">
+            ✕
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1.5 text-xs text-base-content/75" id="chat-log" aria-live="polite"></div>
+        <form class="shrink-0 flex flex-col gap-1 p-2 border-t border-base-300" id="chat-form">
+          <input type="text" id="chat-input" placeholder="Message…" aria-label="Chat message" autocomplete="off"
+            class="input input-bordered input-xs w-full" />
+          <button class="btn btn-xs btn-primary w-full" type="submit">Send</button>
+        </form>
       </div>
-      <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1.5 text-xs text-base-content/70" id="chat-log" aria-live="polite"></div>
-      <form class="shrink-0 flex flex-col gap-1 p-2 border-t border-base-300" id="chat-form">
-        <input type="text" id="chat-input" placeholder="Message…" aria-label="Chat message" autocomplete="off"
-          class="input input-bordered input-xs w-full" />
-        <button class="btn btn-xs btn-primary w-full" type="submit">Send</button>
-      </form>
     </aside>
   </div>
 

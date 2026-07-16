@@ -232,6 +232,46 @@ import { mountEditors } from "./editor.js";
     });
   }
 
+
+  // —— Collapsible chat sidebar (Docs-style) ——
+  const chatRail = document.getElementById("chat-rail");
+  const btnChat = document.getElementById("btn-chat");
+  const btnChatClose = document.getElementById("btn-chat-close");
+  const CHAT_KEY = "gaderno-chat-open";
+
+  function setChatOpen(open) {
+    if (!chatRail) return;
+    chatRail.dataset.open = open ? "true" : "false";
+    chatRail.setAttribute("aria-hidden", open ? "false" : "true");
+    if (btnChat) {
+      btnChat.setAttribute("aria-expanded", open ? "true" : "false");
+      btnChat.classList.toggle("btn-active", open);
+    }
+    try {
+      localStorage.setItem(CHAT_KEY, open ? "1" : "0");
+    } catch (_) {}
+    if (open) {
+      const input = document.getElementById("chat-input");
+      if (input) setTimeout(function () { input.focus(); }, 180);
+    }
+  }
+
+  function toggleChat() {
+    if (!chatRail) return;
+    setChatOpen(chatRail.dataset.open !== "true");
+  }
+
+  if (btnChat) btnChat.addEventListener("click", toggleChat);
+  if (btnChatClose) btnChatClose.addEventListener("click", function () { setChatOpen(false); });
+
+  // Restore preference (default closed — more room for editors)
+  try {
+    setChatOpen(localStorage.getItem(CHAT_KEY) === "1");
+  } catch (_) {
+    setChatOpen(false);
+  }
+
+
   if (path) connect();
   if (kernelEl && cfg.kernel) kernelEl.textContent = cfg.kernel;
 })();

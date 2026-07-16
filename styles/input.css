@@ -126,7 +126,30 @@
     min-height: 6rem;
   }
 
+  /* Docs-style collapsible right sidebar */
   .chat-rail {
+    flex: 0 0 auto;
     min-height: 0;
+    width: 0;
+    max-width: 0;
+    overflow: hidden;
+    transition: width 160ms ease-out, max-width 160ms ease-out;
+  }
+  .chat-rail[data-open="true"] {
+    width: min(18rem, 42vw);
+    max-width: min(18rem, 42vw);
+  }
+  .chat-rail-inner {
+    width: min(18rem, 42vw);
+    min-height: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-rail {
+      transition: none;
+    }
+  }
+  #btn-chat[aria-expanded="true"] {
+    background: color-mix(in oklch, var(--color-primary) 12%, transparent);
+    color: var(--color-primary);
   }
 }
