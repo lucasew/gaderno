@@ -46,27 +46,39 @@ import { createCollabSession } from "./editor.js";
     return api.getSource(cellId);
   }
 
+  // Per-tab hub lifetime fence (SPEC: session identity).
+  const sessionStorageKey = "gaderno.session:" + path;
+  // True only after hello accepted and hello.ack sent for the current socket.
+  let sessionReady = false;
+
   function connect() {
     if (!path) return;
+    sessionReady = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(proto + "://" + location.host + "/ws/notebooks/" + path);
-    ws.binaryType = "arraybuffer";
-    ws.onopen = function () {
-      setStatus("live", "ok");
-      collab.attachTransport({
-        sendBinary: sendBinary,
-        sendJSON: sendJSON,
-      });
+    const sock = new WebSocket(
+      proto + "://" + location.host + "/ws/notebooks/" + path
+    );
+    ws = sock;
+    sock.binaryType = "arraybuffer";
+    sock.onopen = function () {
+      // Do NOT attach Yjs yet — wait for hello so we never push a previous
+      // Y.Doc into a recreated hub before the session fence runs.
+      setStatus("connecting", "off");
     };
-    ws.onclose = function () {
+    sock.onclose = function () {
+      if (ws !== sock) return; // superseded
+      sessionReady = false;
       setStatus("offline", "off");
       setTimeout(connect, 1500);
     };
-    ws.onerror = function () {
+    sock.onerror = function () {
+      if (ws !== sock) return;
       setStatus("error", "err");
     };
-    ws.onmessage = function (ev) {
+    sock.onmessage = function (ev) {
+      if (ws !== sock) return; // ignore events from a previous socket
       if (ev.data instanceof ArrayBuffer) {
+        if (!sessionReady) return; // drop CRDT until session fence passes
         collab.handleSyncMessage(new Uint8Array(ev.data));
         return;
       }
@@ -77,6 +89,31 @@ import { createCollabSession } from "./editor.js";
       } catch (_) {
         return;
       }
+      if (msg.type === "hello") {
+        // "Am I connecting to the same session I was in before?"
+        const prev = sessionStorage.getItem(sessionStorageKey);
+        const sid = msg.session_id || "";
+        if (prev && sid && prev !== sid) {
+          // Different hub life: hard reset BEFORE any CRDT traffic.
+          sessionStorage.setItem(sessionStorageKey, sid);
+          try {
+            sock.close();
+          } catch (_) {}
+          location.reload();
+          return;
+        }
+        if (sid) sessionStorage.setItem(sessionStorageKey, sid);
+        // Ack first (server will send sync step1 only after this), then attach.
+        sessionReady = true;
+        sendJSON({ type: "hello.ack", session_id: sid });
+        collab.attachTransport({
+          sendBinary: sendBinary,
+          sendJSON: sendJSON,
+        });
+        setStatus("live", "ok");
+        return;
+      }
+      if (!sessionReady) return;
       if (msg.type === "awareness" && msg.update) {
         collab.handleAwarenessB64(msg.update);
       } else if (msg.type === "notebook.structure") {
@@ -265,7 +302,7 @@ import { createCollabSession } from "./editor.js";
   function applyStructure(cells) {
     const root = document.getElementById("cells");
     if (!root || !Array.isArray(cells)) return;
-    // Dedupe by id (last wins order as given, first occurrence kept)
+    // Dedupe by id (first occurrence kept)
     const seen = new Set();
     const unique = [];
     cells.forEach(function (c) {
@@ -273,8 +310,64 @@ import { createCollabSession } from "./editor.js";
       seen.add(c.id);
       unique.push(c);
     });
-    root.innerHTML = unique.map(buildCellHTML).join("") ||
-      '<p class="text-xs text-base-content/50 p-3">Empty notebook. Use + Code or + Markdown.</p>';
+    if (unique.length === 0) {
+      root.innerHTML =
+        '<p class="text-xs text-base-content/50 p-3">Empty notebook. Use + Code or + Markdown.</p>';
+      api = collab.mountEditors(root);
+      return;
+    }
+
+    // Map current rows. Reuse id+type matches so editors/out-blocks survive.
+    // Critical: reorder with insertBefore under #cells — never DocumentFragment
+    // (detaching CodeMirror from the document breaks the views).
+    $all(":scope > :not(.cell-row)", root).forEach(function (el) {
+      el.remove(); // drop empty-state placeholders etc.
+    });
+
+    const byId = new Map();
+    $all(".cell-row", root).forEach(function (el) {
+      const id = el.getAttribute("data-cell-id");
+      if (id) byId.set(id, el);
+    });
+
+    unique.forEach(function (c) {
+      const typ = c.type === "markdown" ? "markdown" : "code";
+      let el = byId.get(c.id);
+      if (el && el.getAttribute("data-cell-type") === typ) return;
+      if (el) {
+        el.remove();
+        byId.delete(c.id);
+      }
+      const tmp = document.createElement("div");
+      tmp.innerHTML = buildCellHTML(c);
+      el = tmp.firstElementChild;
+      if (!el) return;
+      root.appendChild(el);
+      byId.set(c.id, el);
+    });
+
+    const want = new Set(
+      unique.map(function (c) {
+        return c.id;
+      })
+    );
+    byId.forEach(function (el, id) {
+      if (!want.has(id)) {
+        el.remove();
+        byId.delete(id);
+      }
+    });
+
+    // In-document reorder only (insertBefore on an already-attached child).
+    unique.forEach(function (c, i) {
+      const el = byId.get(c.id);
+      if (!el || el.parentNode !== root) return;
+      const ref = root.children[i];
+      if (ref !== el) {
+        root.insertBefore(el, ref || null);
+      }
+    });
+
     api = collab.mountEditors(root);
   }
 

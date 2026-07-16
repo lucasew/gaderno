@@ -111,6 +111,8 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | 33 | **`NeedsKernel` blocks exec only** — edit, chat, save, awareness still work. Multi-client: session-level chooser; first valid pick wins; all clients see the same bound name. |
 | 34 | **Switch kernel:** kill old process if any; clear exec queue; rebind; next Run spawns the new spec (lazy). |
 | 35 | **Persist kernelspec into ipynb only after successful spawn** (not on bind alone). |
+| 36 | **Session identity fence:** each live hub has a stable **`session_id`** (UUID minted at hub open). It is **not** the Jupyter ZMQ messaging session and does **not** change on kernel restart/rebind. It changes only when the hub is newly created (process start, hub eviction/reopen). |
+| 37 | **Client session check:** on WS connect the server sends **only** `hello { session_id, client_id }` first (no CRDT yet). The client asks: *“am I connecting to the same session I was in before?”* Remember last `session_id` per notebook path in **`sessionStorage`** (per-tab). Same id (or first visit) → client sends `hello.ack { session_id }`, **then** attaches Yjs and the server may apply sync / control from that peer. Different id → write the new id, close socket, **`location.reload()`** — **never** sync first. Server **rejects** binary CRDT and control from peers that have not acked hello (blocks a reconnecting tab from poisoning a recreated hub with an old Y.Doc). |
 
 ---
 
@@ -121,6 +123,7 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | **Module** | Package with a small interface and substantial behavior (deep module). |
 | **Seam** | Boundary where adapters swap (`KernelConn`, `CRDTDoc`, `NotebookStore`). |
 | **Session** | Live binding: one notebook path + ygo doc + ≤1 kernel + connected clients. |
+| **Session id** | UUID for one hub lifetime. Clients compare on reconnect; mismatch ⇒ hard page reset. Distinct from kernel ZMQ `session` headers and from per-connection `client_id`. |
 | **Hub** | Per-notebook actor: serializes server-side mutations, owns kernel IOPub apply, fans out WS. |
 | **Server ack** | Update accepted into server ygo (and will be relayed). Powers “Synced” UI. |
 | **Disk flush** | Debounced write of `.ipynb`. Not what “Synced” means in v1. |
@@ -434,6 +437,8 @@ sequenceDiagram
 
 | Kind | Direction | Role |
 |------|-----------|------|
+| `hello` | s→c | **First** frame after connect: `{ session_id, client_id }`. No CRDT until ack. |
+| `hello.ack` | c→s | Client accepted this `session_id` (or first visit). Server marks peer Ready and starts sync. |
 | `yjs` / binary sync | both | Yjs update / sync step / awareness (y-protocols style) |
 | `exec.cmd` | c→s | run, interrupt, restart, enqueue range |
 | `exec.event` | s→c | optional high-level busy toasts (CRDT may already carry status) |
@@ -456,7 +461,13 @@ Prefer **binary WS frames** for Yjs updates; JSON text frames for exec/chat/cont
 #### Reconnect
 
 1. WS open → auth/token.
-2. Yjs state vector exchange; server sends missing updates (full resync from ipynb rebuild if session was cold).
+2. Server sends **only `hello`** (`session_id`, `client_id`). No sync step1, no status fan-in for CRDT yet. Client is **not Ready**.
+3. Client compares `session_id` to `sessionStorage` key for this notebook path:
+   - **missing stored id** (first attach in this tab) → store id; send **`hello.ack`**; attach Yjs transport.
+   - **same id** → same live session; send **`hello.ack`**; attach Yjs (may push unacked local text — same life).
+   - **different id** → store new id; close WS; **`location.reload()`**. Do **not** send ack or any CRDT frames.
+4. On **`hello.ack`**, server marks peer Ready, then sends kernel status + Yjs sync step1. Until Ready, server **drops** that peer’s binary sync and control (including awareness).
+5. Yjs state vector exchange proceeds only after the fence.
 3. Awareness rejoin.
 4. Chat history tail from RAM (empty if new session).
 5. Kernel status snapshot.

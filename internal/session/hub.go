@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lucasew/gaderno/internal/crdt"
 	"github.com/lucasew/gaderno/internal/document"
 	"github.com/lucasew/gaderno/internal/kernel"
@@ -18,8 +19,12 @@ import (
 
 // Client is a connected browser peer.
 type Client struct {
-	ID  string
+	ID string
 	Out chan Outbound
+	// Ready is true after the client has acked hello for this hub session.
+	// Until then, CRDT sync and control mutations from this peer are ignored
+	// so a reconnecting tab cannot poison a new hub with a previous Y.Doc.
+	Ready bool
 }
 
 // Outbound is a message to one client.
@@ -42,10 +47,12 @@ const (
 
 // Hub is the per-notebook actor: document CRDT + optional kernel + clients.
 type Hub struct {
-	Path  string
-	Root  string
-	Doc   *crdt.NotebookDoc
-	store *store.Store
+	Path      string
+	Root      string
+	// SessionID identifies this hub lifetime for client fencing (not ZMQ session).
+	SessionID string
+	Doc       *crdt.NotebookDoc
+	store     *store.Store
 
 	mu         sync.Mutex
 	kernel     *kernel.Manager
@@ -82,6 +89,7 @@ func Open(ctx context.Context, st *store.Store, root, rel string) (*Hub, error) 
 	h := &Hub{
 		Path:      rel,
 		Root:      root,
+		SessionID: uuid.NewString(),
 		Doc:       doc,
 		store:     st,
 		boundName: bound,
@@ -407,7 +415,7 @@ func (h *Hub) ExecuteCell(ctx context.Context, cellID string, onStream func(kern
 	return res, err
 }
 
-// AddClient registers a peer.
+// AddClient registers a peer (not Ready until hello.ack).
 func (h *Hub) AddClient(id string) *Client {
 	c := &Client{
 		ID:  id,
@@ -429,8 +437,33 @@ func (h *Hub) RemoveClient(id string) {
 	h.mu.Unlock()
 }
 
+// MarkClientReady marks the peer as having accepted this hub session_id.
+// Returns false if the client is gone.
+func (h *Hub) MarkClientReady(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clients[id]
+	if !ok {
+		return false
+	}
+	c.Ready = true
+	return true
+}
+
+// ClientReady reports whether the peer may apply CRDT/control.
+func (h *Hub) ClientReady(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clients[id]
+	return ok && c.Ready
+}
+
 // HandleSyncMessage applies a y-protocols sync frame.
+// Peers that have not acked hello are ignored (no apply, no reply).
 func (h *Hub) HandleSyncMessage(clientID string, msg []byte) ([]byte, error) {
+	if !h.ClientReady(clientID) {
+		return nil, fmt.Errorf("client not session-ready")
+	}
 	return ysync.ApplySyncMessage(h.Doc.Doc, msg, clientID)
 }
 

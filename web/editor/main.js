@@ -103,10 +103,50 @@ export function createCollabSession() {
     editors.clear();
   }
 
+  function createEditor(host, cellId, lang) {
+    const ytext = ydoc.getText(sourceKey(cellId));
+    const langExt = lang === "markdown" ? markdown() : python();
+    const minH = lang === "markdown" ? 96 : 160;
+    // y-codemirror only observes *future* Y changes — seed CM from Y.Text
+    // or remounts look empty even though the CRDT still has content.
+    const seed = ytext.toString();
+    host.replaceChildren();
+    return new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: seed,
+        extensions: [
+          basicSetup,
+          langExt,
+          EditorView.lineWrapping,
+          yCollab(ytext, awareness, { undoManager: false }),
+          EditorView.theme({
+            "&": { fontSize: "0.8125rem", minHeight: minH + "px" },
+            ".cm-scroller": {
+              fontFamily:
+                'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+              lineHeight: "1.45",
+              minHeight: minH + "px",
+            },
+            ".cm-content": {
+              minHeight: minH - 12 + "px",
+              padding: "10px 0",
+            },
+            "&.cm-focused": {
+              outline: "2px solid oklch(0.48 0.14 250)",
+            },
+          }),
+        ],
+      }),
+    });
+  }
+
+  // Mount or refresh editors under root. Reuses views whose host DOM is still
+  // attached (structure reorder) so typing is not wiped on insert/delete.
   function mountEditors(root) {
-    destroyEditors();
     const scope = root || document;
     const seen = new Set();
+    const alive = new Set();
     scope.querySelectorAll("[data-gaderno-editor]").forEach((host) => {
       const cellId = host.getAttribute("data-cell-id");
       if (!cellId || seen.has(cellId)) {
@@ -119,43 +159,30 @@ export function createCollabSession() {
         return;
       }
       seen.add(cellId);
+      alive.add(cellId);
+
+      const existing = editors.get(cellId);
+      if (existing && host.contains(existing.dom)) {
+        // Same cell host still holds this view (in-place reorder).
+        // Re-measure after layout may have shifted.
+        try {
+          existing.requestMeasure();
+        } catch (_) {}
+        return;
+      }
+      if (existing) {
+        existing.destroy();
+        editors.delete(cellId);
+      }
       const lang = host.getAttribute("data-lang") || "python";
-      host.replaceChildren();
+      editors.set(cellId, createEditor(host, cellId, lang));
+    });
 
-      const ytext = ydoc.getText(sourceKey(cellId));
-      const langExt = lang === "markdown" ? markdown() : python();
-      const minH = lang === "markdown" ? 96 : 160;
-
-      const view = new EditorView({
-        parent: host,
-        state: EditorState.create({
-          // Let yCollab own the document; empty seed, sync fills content.
-          doc: "",
-          extensions: [
-            basicSetup,
-            langExt,
-            EditorView.lineWrapping,
-            yCollab(ytext, awareness, { undoManager: false }),
-            EditorView.theme({
-              "&": { fontSize: "0.8125rem", minHeight: minH + "px" },
-              ".cm-scroller": {
-                fontFamily:
-                  'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
-                lineHeight: "1.45",
-                minHeight: minH + "px",
-              },
-              ".cm-content": {
-                minHeight: minH - 12 + "px",
-                padding: "10px 0",
-              },
-              "&.cm-focused": {
-                outline: "2px solid oklch(0.48 0.14 250)",
-              },
-            }),
-          ],
-        }),
-      });
-      editors.set(cellId, view);
+    editors.forEach((view, id) => {
+      if (!alive.has(id)) {
+        view.destroy();
+        editors.delete(id);
+      }
     });
 
     return {

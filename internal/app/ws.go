@@ -65,11 +65,15 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 			}
 		}()
 
-		hub.SendKernelStatus(client)
-		select {
-		case client.Out <- session.Outbound{Binary: true, Data: hub.EncodeSyncStep1()}:
-		default:
-		}
+		// hello only until client acks — do not push CRDT state or accept
+		// client updates before the session fence passes (prevents a tab with
+		// a previous Y.Doc from poisoning a recreated hub on reconnect).
+		hello, _ := json.Marshal(map[string]string{
+			"type":       "hello",
+			"session_id": hub.SessionID,
+			"client_id":  clientID,
+		})
+		client.Out <- session.Outbound{Data: hello}
 
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -93,6 +97,29 @@ func registerWS(mux *http.ServeMux, reg *session.Registry, logger *slog.Logger) 
 			case websocket.TextMessage:
 				var ctrl wsControl
 				if err := json.Unmarshal(data, &ctrl); err != nil {
+					continue
+				}
+				if ctrl.Type == "hello.ack" {
+					var ack struct {
+						SessionID string `json:"session_id"`
+					}
+					_ = json.Unmarshal(data, &ack)
+					if ack.SessionID != "" && ack.SessionID != hub.SessionID {
+						sendErr(client, "session_id mismatch")
+						continue
+					}
+					if !hub.MarkClientReady(clientID) {
+						continue
+					}
+					hub.SendKernelStatus(client)
+					select {
+					case client.Out <- session.Outbound{Binary: true, Data: hub.EncodeSyncStep1()}:
+					default:
+					}
+					continue
+				}
+				if !hub.ClientReady(clientID) {
+					// Drop awareness/control until session is confirmed.
 					continue
 				}
 				// Awareness: pass through raw JSON so "update" is preserved.

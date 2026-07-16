@@ -230,6 +230,10 @@ func (n *NotebookDoc) DeleteCell(cellID string) error {
 
 // MoveCell moves cellID to new index (0..len-1).
 // Index lookup is outside Transact — ygo Get takes RLock and deadlocks under write txn.
+//
+// Implemented as delete+insert rather than YArray.Move: ygo's ContentMove path
+// fails on subsequent "move up" after a prior move (visible order stalls).
+// Delete+insert is correct for a single server-king writer of cell order.
 func (n *NotebookDoc) MoveCell(cellID string, toIndex int) error {
 	if cellID == "" {
 		return fmt.Errorf("empty cell id")
@@ -259,7 +263,13 @@ func (n *NotebookDoc) MoveCell(cellID string, toIndex int) error {
 	}
 	cells := n.Doc.GetArray(RootCells)
 	return n.Doc.TransactE(func(txn *ycrdt.Transaction) error {
-		cells.Move(txn, from, toIndex)
+		cells.Delete(txn, from, 1)
+		// After delete, insert at the desired final index (same as splice semantics).
+		if toIndex >= cells.Len() {
+			cells.Push(txn, []any{cellID})
+		} else {
+			cells.Insert(txn, toIndex, []any{cellID})
+		}
 		return nil
 	}, OriginServer)
 }
