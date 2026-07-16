@@ -192,35 +192,47 @@ import { createCollabSession } from "./editor.js";
       html +=
         '<span class="font-code text-[0.6875rem] text-base-content/50">Md</span>';
     }
-    html += "</div><div class=\"min-w-0\">";
+    html += '</div><div class="min-w-0">';
     html +=
-      '<div class="flex flex-wrap items-center gap-1 min-h-5 mb-1">';
-    html +=
-      '<span class="text-[0.625rem] uppercase tracking-wide text-base-content/50 font-semibold">' +
-      typ +
-      "</span>";
+      '<div class="flex flex-wrap items-center gap-1 min-h-7 mb-1">';
     if (isCode) {
       html +=
-        '<button type="button" class="btn btn-primary btn-xs run" data-cell-id="' +
+        '<button type="button" class="btn btn-primary btn-xs run shrink-0" data-cell-id="' +
         id +
         '">Run</button>';
-    } else {
-      html +=
-        '<button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="edit">Preview</button>';
     }
-    html += '<span class="flex-1"></span>';
     html +=
-      '<button type="button" class="btn btn-ghost btn-xs btn-square cell-up" data-cell-id="' +
+      '<div role="tablist" class="tabs tabs-box tabs-xs shrink-0">' +
+      '<button type="button" role="tab" class="tab cell-type-tab' +
+      (isCode ? " tab-active" : "") +
+      '" data-cell-id="' +
       id +
-      '" title="Move up">↑</button>';
+      '" data-type="code">Code</button>' +
+      '<button type="button" role="tab" class="tab cell-type-tab' +
+      (!isCode ? " tab-active" : "") +
+      '" data-cell-id="' +
+      id +
+      '" data-type="markdown">Markdown</button></div>';
+    if (!isCode) {
+      html +=
+        '<button type="button" class="btn btn-ghost btn-xs md-toggle shrink-0" data-mode="edit">Preview</button>';
+    }
+    html += '<span class="flex-1 min-w-1"></span>';
     html +=
-      '<button type="button" class="btn btn-ghost btn-xs btn-square cell-down" data-cell-id="' +
+      '<details class="dropdown dropdown-end shrink-0">' +
+      '<summary class="btn btn-ghost btn-xs btn-square" title="Cell menu" aria-label="Cell menu">···</summary>' +
+      '<ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-40 p-1 shadow border border-base-300 text-xs">' +
+      '<li><button type="button" class="cell-up" data-cell-id="' +
       id +
-      '" title="Move down">↓</button>';
-    html +=
-      '<button type="button" class="btn btn-ghost btn-xs btn-square cell-del text-error" data-cell-id="' +
+      '">Move up</button></li>' +
+      '<li><button type="button" class="cell-down" data-cell-id="' +
       id +
-      '" title="Delete cell">✕</button>';
+      '">Move down</button></li>' +
+      '<li><hr class="my-0.5 border-base-300"></li>' +
+      '<li><button type="button" class="cell-del text-error" data-cell-id="' +
+      id +
+      '">Delete</button></li>' +
+      "</ul></details>";
     html += "</div>";
     if (!isCode) {
       html +=
@@ -240,7 +252,7 @@ import { createCollabSession } from "./editor.js";
     return html;
   }
 
-  function applyStructure(cells) {
+  function applyStructure  function applyStructure(cells) {
     const root = document.getElementById("cells");
     if (!root || !Array.isArray(cells)) return;
     // Dedupe by id (last wins order as given, first occurrence kept)
@@ -305,6 +317,70 @@ import { createCollabSession } from "./editor.js";
         host.hidden = false;
         api.focus(id);
       }
+      return;
+    }
+
+    const typeTab = e.target.closest("button.cell-type-tab");
+    if (typeTab) {
+      const id = typeTab.dataset.cellId;
+      const typ = typeTab.dataset.type;
+      if (!id || !typ) return;
+      document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+        d.open = false;
+      });
+      if (typeTab.classList.contains("tab-active")) return;
+      sendJSON({ type: "cell.set_type", cell_id: id, text: typ });
+      return;
+    }
+
+    const addCode = e.target.closest("#btn-add-code");
+    if (addCode) {
+      const n = document.querySelectorAll("#cells .cell-row").length;
+      sendJSON({ type: "cell.insert", text: "code", index: n });
+      return;
+    }
+    const addMd = e.target.closest("#btn-add-md");
+    if (addMd) {
+      const n = document.querySelectorAll("#cells .cell-row").length;
+      sendJSON({ type: "cell.insert", text: "markdown", index: n });
+      return;
+    }
+    const del = e.target.closest(".cell-del");
+    if (del) {
+      const id = del.dataset.cellId;
+      if (!id) return;
+      if (!confirm("Delete this cell?")) return;
+      document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+        d.open = false;
+      });
+      sendJSON({ type: "cell.delete", cell_id: id });
+      return;
+    }
+    const up = e.target.closest(".cell-up");
+    if (up) {
+      const id = up.dataset.cellId;
+      const rows = $all("#cells .cell-row");
+      const idx = rows.findIndex(function (r) {
+        return r.getAttribute("data-cell-id") === id;
+      });
+      document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+        d.open = false;
+      });
+      if (idx > 0) sendJSON({ type: "cell.move", cell_id: id, index: idx - 1 });
+      return;
+    }
+    const down = e.target.closest(".cell-down");
+    if (down) {
+      const id = down.dataset.cellId;
+      const rows = $all("#cells .cell-row");
+      const idx = rows.findIndex(function (r) {
+        return r.getAttribute("data-cell-id") === id;
+      });
+      document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+        d.open = false;
+      });
+      if (idx >= 0 && idx < rows.length - 1)
+        sendJSON({ type: "cell.move", cell_id: id, index: idx + 1 });
       return;
     }
 

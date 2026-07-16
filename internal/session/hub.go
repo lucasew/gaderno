@@ -333,6 +333,19 @@ func (h *Hub) MoveCell(cellID string, toIndex int) error {
 	return nil
 }
 
+// SetCellType changes code/markdown and notifies clients to rebuild.
+func (h *Hub) SetCellType(cellID, cellType string) error {
+	ct := document.CellType(cellType)
+	if ct != document.CellCode && ct != document.CellMarkdown && ct != document.CellRaw {
+		return fmt.Errorf("invalid cell type %q", cellType)
+	}
+	if err := h.Doc.SetCellType(cellID, ct); err != nil {
+		return err
+	}
+	h.broadcastStructure()
+	return nil
+}
+
 func (h *Hub) broadcastStructure() {
 	cells := h.Doc.SnapshotCells()
 	b, _ := json.Marshal(map[string]any{

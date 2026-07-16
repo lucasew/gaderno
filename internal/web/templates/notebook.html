@@ -63,17 +63,27 @@
           {{ end }}
         </div>
         <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-1 min-h-5 mb-1">
-            <span class="text-[0.625rem] uppercase tracking-wide text-base-content/50 font-semibold">{{ .Type }}</span>
+          <div class="flex flex-wrap items-center gap-1 min-h-7 mb-1">
             {{ if eq .Type "code" }}
-            <button type="button" class="btn btn-primary btn-xs run" data-cell-id="{{ .ID }}">Run</button>
-            {{ else if eq .Type "markdown" }}
-            <button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="edit">Preview</button>
+            <button type="button" class="btn btn-primary btn-xs run shrink-0" data-cell-id="{{ .ID }}">Run</button>
             {{ end }}
-            <span class="flex-1"></span>
-            <button type="button" class="btn btn-ghost btn-xs btn-square cell-up" data-cell-id="{{ .ID }}" title="Move up">↑</button>
-            <button type="button" class="btn btn-ghost btn-xs btn-square cell-down" data-cell-id="{{ .ID }}" title="Move down">↓</button>
-            <button type="button" class="btn btn-ghost btn-xs btn-square cell-del text-error" data-cell-id="{{ .ID }}" title="Delete cell">✕</button>
+            <div role="tablist" class="tabs tabs-box tabs-xs shrink-0">
+              <button type="button" role="tab" class="tab cell-type-tab {{ if eq .Type "code" }}tab-active{{ end }}" data-cell-id="{{ .ID }}" data-type="code">Code</button>
+              <button type="button" role="tab" class="tab cell-type-tab {{ if eq .Type "markdown" }}tab-active{{ end }}" data-cell-id="{{ .ID }}" data-type="markdown">Markdown</button>
+            </div>
+            {{ if eq .Type "markdown" }}
+            <button type="button" class="btn btn-ghost btn-xs md-toggle shrink-0" data-mode="edit">Preview</button>
+            {{ end }}
+            <span class="flex-1 min-w-1"></span>
+            <details class="dropdown dropdown-end shrink-0">
+              <summary class="btn btn-ghost btn-xs btn-square" title="Cell menu" aria-label="Cell menu">···</summary>
+              <ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-40 p-1 shadow border border-base-300 text-xs">
+                <li><button type="button" class="cell-up" data-cell-id="{{ .ID }}">Move up</button></li>
+                <li><button type="button" class="cell-down" data-cell-id="{{ .ID }}">Move down</button></li>
+                <li><hr class="my-0.5 border-base-300"></li>
+                <li><button type="button" class="cell-del text-error" data-cell-id="{{ .ID }}">Delete</button></li>
+              </ul>
+            </details>
           </div>
           {{ if eq .Type "markdown" }}
           <div class="md-preview text-sm whitespace-pre-wrap" hidden></div>

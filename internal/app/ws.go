@@ -171,6 +171,18 @@ func handleControl(hub *session.Hub, client *session.Client, clientID string, ct
 		if err := hub.DeleteCell(ctrl.CellID); err != nil {
 			sendErr(client, err.Error())
 		}
+	case "cell.set_type":
+		if ctrl.CellID == "" {
+			sendErr(client, "cell_id required")
+			return
+		}
+		ct := ctrl.Text
+		if ct == "" {
+			ct = ctrl.Name
+		}
+		if err := hub.SetCellType(ctrl.CellID, ct); err != nil {
+			sendErr(client, err.Error())
+		}
 	case "cell.move":
 		if ctrl.CellID == "" || ctrl.Index == nil {
 			sendErr(client, "cell_id and index required")

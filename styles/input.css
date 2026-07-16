@@ -163,4 +163,14 @@
   #kernel-dialog .menu li > .kernel-pick {
     border-radius: 0.25rem;
   }
+
+  .cell-row .tabs-box {
+    --tabs-height: 1.5rem;
+  }
+  .cell-row .tab {
+    min-height: 1.5rem;
+    height: 1.5rem;
+    padding-inline: 0.5rem;
+    font-size: 0.6875rem;
+  }
 }
