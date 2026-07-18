@@ -19,7 +19,7 @@ import (
 
 // Client is a connected browser peer.
 type Client struct {
-	ID string
+	ID  string
 	Out chan Outbound
 	// Ready is true after the client has acked hello for this hub session.
 	// Until then, CRDT sync and control mutations from this peer are ignored
@@ -38,7 +38,7 @@ type KernelPhase string
 
 const (
 	PhaseNeedsKernel KernelPhase = "needs_kernel"
-	PhaseBound       KernelPhase = "bound"   // name selected, process not started
+	PhaseBound       KernelPhase = "bound" // name selected, process not started
 	PhaseStarting    KernelPhase = "starting"
 	PhaseReady       KernelPhase = "ready"
 	PhaseBusy        KernelPhase = "busy"
@@ -47,21 +47,21 @@ const (
 
 // Hub is the per-notebook actor: document CRDT + optional kernel + clients.
 type Hub struct {
-	Path      string
-	Root      string
+	Path string
+	Root string
 	// SessionID identifies this hub lifetime for client fencing (not ZMQ session).
 	SessionID string
 	Doc       *crdt.NotebookDoc
 	store     *store.Store
 
-	mu         sync.Mutex
-	kernel     *kernel.Manager
-	boundName  string // empty = NeedsKernel
-	phase      KernelPhase
-	clients    map[string]*Client
-	saveTimer  *time.Timer
-	unsub      func()
-	spawning   bool
+	mu        sync.Mutex
+	kernel    *kernel.Manager
+	boundName string // empty = NeedsKernel
+	phase     KernelPhase
+	clients   map[string]*Client
+	saveTimer *time.Timer
+	unsub     func()
+	spawning  bool
 }
 
 // Open loads a notebook from store into a new Hub.

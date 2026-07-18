@@ -17,12 +17,12 @@ type Spec struct {
 
 // SpecFile is the contents of kernel.json.
 type SpecFile struct {
-	Argv         []string          `json:"argv"`
-	DisplayName  string            `json:"display_name"`
-	Language     string            `json:"language"`
-	InterruptMode string           `json:"interrupt_mode,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
+	Argv          []string          `json:"argv"`
+	DisplayName   string            `json:"display_name"`
+	Language      string            `json:"language"`
+	InterruptMode string            `json:"interrupt_mode,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Metadata      map[string]any    `json:"metadata,omitempty"`
 }
 
 // Discover finds kernelspecs using Jupyter-compatible search paths.
@@ -65,7 +65,6 @@ func Discover() ([]Spec, error) {
 	}
 	return out, nil
 }
-
 
 // searchPaths mirrors jupyter_core.paths.jupyter_path("kernels") order:
 // JUPYTER_PATH entries, then data dirs' kernels/ subdirs (user → env → system).

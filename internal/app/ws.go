@@ -22,13 +22,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type wsControl struct {
-	Type      string `json:"type"`
-	CellID    string `json:"cell_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Update    string `json:"update,omitempty"` // base64 awareness payload
-	Index     *int   `json:"index,omitempty"`
+	Type        string `json:"type"`
+	CellID      string `json:"cell_id,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Update      string `json:"update,omitempty"` // base64 awareness payload
+	Index       *int   `json:"index,omitempty"`
 	Code        string `json:"code,omitempty"`
 	CursorPos   *int   `json:"cursor_pos,omitempty"`
 	ReqID       string `json:"req_id,omitempty"`

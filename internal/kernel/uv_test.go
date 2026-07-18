@@ -22,9 +22,9 @@ pypy-3.11.15-linux-x86_64-gnu                     <download available>
 
 func TestUVKernelName(t *testing.T) {
 	cases := map[string]string{
-		"cpython-3.13.7-linux-x86_64-gnu":                "uv-cpython-3.13.7",
-		"cpython-3.14.6+freethreaded-linux-x86_64-gnu":   "uv-cpython-3.14.6-freethreaded",
-		"pypy-3.11.15-linux-x86_64-gnu":                  "uv-pypy-3.11.15",
+		"cpython-3.13.7-linux-x86_64-gnu":              "uv-cpython-3.13.7",
+		"cpython-3.14.6+freethreaded-linux-x86_64-gnu": "uv-cpython-3.14.6-freethreaded",
+		"pypy-3.11.15-linux-x86_64-gnu":                "uv-pypy-3.11.15",
 	}
 	for in, want := range cases {
 		if got := uvKernelName(in); got != want {

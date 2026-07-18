@@ -38,16 +38,16 @@ type Cell struct {
 
 // Output is a code cell output.
 type Output struct {
-	OutputType     string            `json:"output_type"`
-	Name           string            `json:"name,omitempty"`
-	Text           *Multiline        `json:"text,omitempty"`
-	Data           map[string]any    `json:"data,omitempty"`
-	Metadata       map[string]any    `json:"metadata,omitempty"`
-	Ename          string            `json:"ename,omitempty"`
-	Evalue         string            `json:"evalue,omitempty"`
-	Traceback      []string          `json:"traceback,omitempty"`
-	ExecutionCount *int              `json:"execution_count,omitempty"`
-	Transient      map[string]any    `json:"transient,omitempty"`
+	OutputType     string         `json:"output_type"`
+	Name           string         `json:"name,omitempty"`
+	Text           *Multiline     `json:"text,omitempty"`
+	Data           map[string]any `json:"data,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	Ename          string         `json:"ename,omitempty"`
+	Evalue         string         `json:"evalue,omitempty"`
+	Traceback      []string       `json:"traceback,omitempty"`
+	ExecutionCount *int           `json:"execution_count,omitempty"`
+	Transient      map[string]any `json:"transient,omitempty"`
 }
 
 // Multiline is nbformat source/text: string or array of strings.
