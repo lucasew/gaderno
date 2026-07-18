@@ -29,17 +29,42 @@ import { createCollabSession } from "./editor.js";
       .replace(/"/g, "&quot;");
   }
 
+  function kernelLabel() {
+    if (!kernelStatus || kernelStatus.needs_kernel || !kernelStatus.bound_name)
+      return "";
+    return (
+      kernelStatus.display_name ||
+      kernelStatus.bound_name ||
+      ""
+    ).trim();
+  }
+
+  /** e.g. "Live · Python 3" when a kernel is bound */
+  function withKernel(text) {
+    const k = kernelLabel();
+    if (!k || !text) return text || "";
+    // Avoid doubling if caller already appended the name
+    if (text.indexOf(k) !== -1) return text;
+    return text + " · " + k;
+  }
+
   function setStatus(text, state) {
     if (sessionDot) sessionDot.setAttribute("data-state", state || "off");
     if (sessionLabel) sessionLabel.textContent = text || "";
     if (btnSession) {
-      const needs = kernelStatus && (kernelStatus.needs_kernel || !kernelStatus.bound_name);
+      const needs =
+        kernelStatus && (kernelStatus.needs_kernel || !kernelStatus.bound_name);
       let title = text || "Session";
-      if (needs) title += " · choose kernel";
-      else if (kernelStatus && kernelStatus.bound_name)
-        title += " · " + (kernelStatus.display_name || kernelStatus.bound_name);
+      if (needs) title = (text || "Session") + " · choose kernel";
+      else if (kernelLabel() && title.indexOf(kernelLabel()) === -1)
+        title = withKernel(text || "Session");
       btnSession.title = title;
+      btnSession.setAttribute("aria-label", title);
     }
+  }
+
+  function setLiveStatus(state) {
+    setStatus(withKernel("Live"), state || "ok");
   }
 
   function sendJSON(obj) {
@@ -173,7 +198,8 @@ import { createCollabSession } from "./editor.js";
         });
         const dn = getDisplayName();
         if (dn && typeof collab.setUserName === "function") collab.setUserName(dn);
-        setStatus("Live", "ok");
+        setLiveStatus("ok");
+        applyKernelStatus(kernelStatus);
         return;
       }
       if (!sessionReady) return;
@@ -241,7 +267,7 @@ import { createCollabSession } from "./editor.js";
           countEl.textContent = "[" + msg.execution_count + "]";
           countEl.setAttribute("data-count", String(msg.execution_count));
         }
-        setStatus("Live", "ok");
+        setLiveStatus("ok");
         if (play) {
           play.disabled = false;
           play.classList.remove("is-running");
@@ -721,10 +747,13 @@ import { createCollabSession } from "./editor.js";
     // Don't override live/offline connection label unless connected
     if (sessionReady) {
       if (needs) setStatus("Pick kernel", "warn");
-      else if (st.phase === "busy" || st.running) setStatus("Busy", "run");
-      else if (st.phase === "starting") setStatus("Starting", "run");
-      else if (st.phase === "dead") setStatus("Kernel error", "err");
-      else setStatus("Live", "ok");
+      else if (st.phase === "busy" || st.running)
+        setStatus(withKernel("Busy"), "run");
+      else if (st.phase === "starting")
+        setStatus(withKernel("Starting"), "run");
+      else if (st.phase === "dead")
+        setStatus(withKernel("Kernel error"), "err");
+      else setLiveStatus("ok");
     }
     if (needs && kernelDialog && !kernelDialog.open && !autoOpenedChooser) {
       autoOpenedChooser = true;
@@ -870,10 +899,13 @@ import { createCollabSession } from "./editor.js";
         body: JSON.stringify({ path: path }),
       })
         .then(function (r) {
-          setStatus(r.ok ? "Saved" : "Save failed", r.ok ? "ok" : "err");
+          setStatus(
+            r.ok ? withKernel("Saved") : "Save failed",
+            r.ok ? "ok" : "err"
+          );
           if (r.ok)
             setTimeout(function () {
-              if (sessionReady) setStatus("Live", "ok");
+              if (sessionReady) setLiveStatus("ok");
             }, 900);
         })
         .catch(function () {
@@ -912,9 +944,9 @@ import { createCollabSession } from "./editor.js";
         .then(function (st) {
           applyKernelStatus(st);
           if (kernelDialog) kernelDialog.close();
-          setStatus("Kernel ready", "ok");
+          setStatus(withKernel("Kernel ready"), "ok");
           setTimeout(function () {
-            if (sessionReady) setStatus("Live", "ok");
+            if (sessionReady) setLiveStatus("ok");
           }, 600);
         })
         .catch(function (err) {

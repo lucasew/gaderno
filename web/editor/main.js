@@ -121,7 +121,12 @@ export function createCollabSession() {
           EditorView.lineWrapping,
           yCollab(ytext, awareness, { undoManager: false }),
           EditorView.theme({
-            "&": { fontSize: "0.8125rem", minHeight: minH + "px" },
+            "&": {
+              fontSize: "0.8125rem",
+              minHeight: minH + "px",
+              backgroundColor: "var(--color-base-100)",
+              color: "var(--color-base-content)",
+            },
             ".cm-scroller": {
               fontFamily:
                 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
@@ -131,9 +136,23 @@ export function createCollabSession() {
             ".cm-content": {
               minHeight: minH - 12 + "px",
               padding: "10px 0",
+              caretColor: "var(--color-primary)",
+            },
+            ".cm-gutters": {
+              backgroundColor: "var(--color-base-200)",
+              color: "color-mix(in oklch, var(--color-base-content) 45%, transparent)",
+              borderRight: "1px solid var(--color-base-300)",
+            },
+            ".cm-activeLineGutter": {
+              backgroundColor:
+                "color-mix(in oklch, var(--color-primary) 10%, var(--color-base-200))",
+            },
+            ".cm-activeLine": {
+              backgroundColor:
+                "color-mix(in oklch, var(--color-primary) 7%, transparent)",
             },
             "&.cm-focused": {
-              outline: "2px solid oklch(0.48 0.14 250)",
+              outline: "none",
             },
           }),
         ],
