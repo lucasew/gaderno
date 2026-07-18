@@ -9,23 +9,26 @@ People running local Jupyter-style notebooks who want a **server-owned, collabor
 Primary tasks: open a workspace, open/create notebooks, edit cells, run code, see outputs, co-edit/chat with another tab.
 
 ## Personality
-Quiet · Dense · Instrument-like (cobalt signal on steel-neutral paper)
+Quiet · Spacious · Polished · Quiet delight (cobalt signal; Go **G** mark as logo only)
 
 ## Visual direction
 - **daisyUI 5 + Tailwind 4**: source in `styles/input.css`, `bun run build:css` → embedded `internal/web/static/app.css`
-- **Jupyter familiarity** for cell semantics (In/Out, code vs markdown, run affordances)
-- **Dense tool chrome**: sticky topbar ~2.5rem, `btn-xs` / `table-xs` / `badge-xs`, hairline cell separators, no airy marketing cards
+- **Spacier product UI** that stays usable on mobile (edit + run is the bar)
+- **Icon chrome**: G · session status · chat · avatar — icons only on mobile
+- **Cells**: play + execution count in the gutter; markdown preview-first; Colab-style insert gaps
 - Themes: `gaderno-light` / `gaderno-dark`
-- Restrained palette: pure base + cobalt primary (hue ~250°)
+- Restrained palette: pure base + cobalt primary; **gopher cyan (`#00ADD8`) for the logo chip only**
 
 ## Anti-references
-- Classic JupyterLab chrome clone (heavy sidebars, purple Lab skin)
+- Classic JupyterLab chrome clone (heavy sidebars, purple Lab skin, permanent In/Out + Run on every row)
 - Finance/money green–gold product skins
 - Cream/sand SaaS backgrounds
 - Glassmorphism, gradient text, hero KPI cards
+- Dense “instrument packing” that breaks on ~390px
 
 ## Design principles
-1. Cells and outputs first — chrome stays thin.
-2. Density like a lab notebook, not a landing page.
-3. Buttons over hotkeys (v1).
-4. Trust: clear run/error/sync state; no fake sandbox cues.
+1. Cells and outputs first — chrome stays thin and icon-first.
+2. Space for reading and tapping; not a marketing landing page.
+3. Explicit controls over hotkeys (v1).
+4. Trust: clear run / sync / kernel state; no fake sandbox cues.
+5. Mobile edit+run works; kernel/export/theme progressive via session + avatar.

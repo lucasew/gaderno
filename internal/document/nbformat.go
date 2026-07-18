@@ -119,10 +119,15 @@ func EnsureCellIDs(nb *Notebook) {
 	if nb.NBFormatMinor < 5 {
 		nb.NBFormatMinor = 5
 	}
+	seen := map[string]bool{}
 	for i := range nb.Cells {
-		if nb.Cells[i].ID == "" {
-			nb.Cells[i].ID = newCellID()
+		id := nb.Cells[i].ID
+		if id == "" || seen[id] {
+			// Missing or duplicate IDs bind multiple editors to the same Y.Text.
+			id = newCellID()
+			nb.Cells[i].ID = id
 		}
+		seen[id] = true
 		if nb.Cells[i].Metadata == nil {
 			nb.Cells[i].Metadata = map[string]any{}
 		}
@@ -131,6 +136,9 @@ func EnsureCellIDs(nb *Notebook) {
 		}
 	}
 }
+
+// NewCellID returns a fresh cell id (for structure ops).
+func NewCellID() string { return newCellID() }
 
 // SourceString returns cell source as a single string.
 func (c Cell) SourceString() string {

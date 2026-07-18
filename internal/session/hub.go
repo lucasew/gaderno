@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lucasew/gaderno/internal/crdt"
 	"github.com/lucasew/gaderno/internal/document"
 	"github.com/lucasew/gaderno/internal/kernel"
@@ -18,8 +19,12 @@ import (
 
 // Client is a connected browser peer.
 type Client struct {
-	ID  string
+	ID string
 	Out chan Outbound
+	// Ready is true after the client has acked hello for this hub session.
+	// Until then, CRDT sync and control mutations from this peer are ignored
+	// so a reconnecting tab cannot poison a new hub with a previous Y.Doc.
+	Ready bool
 }
 
 // Outbound is a message to one client.
@@ -42,10 +47,12 @@ const (
 
 // Hub is the per-notebook actor: document CRDT + optional kernel + clients.
 type Hub struct {
-	Path  string
-	Root  string
-	Doc   *crdt.NotebookDoc
-	store *store.Store
+	Path      string
+	Root      string
+	// SessionID identifies this hub lifetime for client fencing (not ZMQ session).
+	SessionID string
+	Doc       *crdt.NotebookDoc
+	store     *store.Store
 
 	mu         sync.Mutex
 	kernel     *kernel.Manager
@@ -82,6 +89,7 @@ func Open(ctx context.Context, st *store.Store, root, rel string) (*Hub, error) 
 	h := &Hub{
 		Path:      rel,
 		Root:      root,
+		SessionID: uuid.NewString(),
 		Doc:       doc,
 		store:     st,
 		boundName: bound,
@@ -301,13 +309,103 @@ func (h *Hub) persistKernelspecLocked(name string) error {
 	return h.store.Save(context.Background(), h.Path, nb)
 }
 
-// SetCellSource updates cell source in the CRDT.
-func (h *Hub) SetCellSource(cellID, source string) error {
-	return h.Doc.SetSourceServer(cellID, source)
+// InsertCell adds a cell and notifies clients to rebuild structure.
+func (h *Hub) InsertCell(index int, cellType string) (string, error) {
+	ct := document.CellType(cellType)
+	if ct == "" {
+		ct = document.CellCode
+	}
+	id, err := h.Doc.InsertCell(index, ct, "")
+	if err != nil {
+		return "", err
+	}
+	h.broadcastStructure()
+	return id, nil
+}
+
+// DeleteCell removes a cell and notifies clients.
+func (h *Hub) DeleteCell(cellID string) error {
+	if err := h.Doc.DeleteCell(cellID); err != nil {
+		return err
+	}
+	h.broadcastStructure()
+	return nil
+}
+
+// MoveCell reorders a cell and notifies clients.
+func (h *Hub) MoveCell(cellID string, toIndex int) error {
+	if err := h.Doc.MoveCell(cellID, toIndex); err != nil {
+		return err
+	}
+	h.broadcastStructure()
+	return nil
+}
+
+// SetCellType changes code/markdown and notifies clients to rebuild.
+func (h *Hub) SetCellType(cellID, cellType string) error {
+	ct := document.CellType(cellType)
+	if ct != document.CellCode && ct != document.CellMarkdown && ct != document.CellRaw {
+		return fmt.Errorf("invalid cell type %q", cellType)
+	}
+	if err := h.Doc.SetCellType(cellID, ct); err != nil {
+		return err
+	}
+	h.broadcastStructure()
+	return nil
+}
+
+func (h *Hub) broadcastStructure() {
+	cells := h.Doc.SnapshotCells()
+	b, _ := json.Marshal(map[string]any{
+		"type":  "notebook.structure",
+		"cells": cells,
+	})
+	h.BroadcastJSON(b, "")
+	h.scheduleSave()
+}
+
+// SetCellSource updates cell source in the CRDT and notifies other clients.
+// skipClient is the originator (they already have the text); empty = notify all.
+func (h *Hub) SetCellSource(cellID, source string, skipClient string) error {
+	if err := h.Doc.SetSourceServer(cellID, source); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]any{
+		"type":    "cell.source",
+		"cell_id": cellID,
+		"source":  source,
+	})
+	h.BroadcastJSON(b, skipClient)
+	return nil
+}
+
+// Complete asks the live kernel for code completions. Kernel must already be
+// running (does not auto-spawn — keeps autocomplete snappy and predictable).
+func (h *Hub) Complete(ctx context.Context, code string, cursorPos int) (kernel.CompleteResult, error) {
+	h.mu.Lock()
+	k := h.kernel
+	h.mu.Unlock()
+	if k == nil {
+		return kernel.CompleteResult{Status: "no_kernel", Matches: []string{}, CursorStart: cursorPos, CursorEnd: cursorPos}, nil
+	}
+	return k.Complete(ctx, code, cursorPos)
+}
+
+// Inspect asks the live kernel for hover docs / signature help at cursorPos.
+// detailLevel: 0 abbreviated, 1 full. No auto-spawn (same as Complete).
+func (h *Hub) Inspect(ctx context.Context, code string, cursorPos, detailLevel int) (kernel.InspectResult, error) {
+	h.mu.Lock()
+	k := h.kernel
+	h.mu.Unlock()
+	if k == nil {
+		return kernel.InspectResult{Status: "no_kernel", Found: false, DetailLevel: detailLevel}, nil
+	}
+	return k.Inspect(ctx, code, cursorPos, detailLevel)
 }
 
 // ExecuteCell runs a cell by id (kernel must already be started).
-func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteResult, error) {
+// onStream may be nil; when set, called for each stdout/stderr chunk.
+func (h *Hub) ExecuteCell(ctx context.Context, cellID string, onStream func(kernel.StreamChunk)) (kernel.ExecuteResult, error) {
 	h.mu.Lock()
 	k := h.kernel
 	src := h.Doc.Source(cellID)
@@ -320,7 +418,16 @@ func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteRes
 	h.mu.Unlock()
 	h.broadcastKernelStatus(st)
 
-	res, err := k.Execute(ctx, src)
+	// clear outputs signal
+	b0, _ := json.Marshal(map[string]any{
+		"type":    "exec.clear",
+		"cell_id": cellID,
+	})
+	h.BroadcastJSON(b0, "")
+
+	res, err := k.ExecuteOpts(ctx, src, kernel.ExecuteOpts{
+		OnStream: onStream,
+	})
 
 	h.mu.Lock()
 	if h.kernel != nil {
@@ -332,7 +439,7 @@ func (h *Hub) ExecuteCell(ctx context.Context, cellID string) (kernel.ExecuteRes
 	return res, err
 }
 
-// AddClient registers a peer.
+// AddClient registers a peer (not Ready until hello.ack).
 func (h *Hub) AddClient(id string) *Client {
 	c := &Client{
 		ID:  id,
@@ -354,8 +461,33 @@ func (h *Hub) RemoveClient(id string) {
 	h.mu.Unlock()
 }
 
+// MarkClientReady marks the peer as having accepted this hub session_id.
+// Returns false if the client is gone.
+func (h *Hub) MarkClientReady(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clients[id]
+	if !ok {
+		return false
+	}
+	c.Ready = true
+	return true
+}
+
+// ClientReady reports whether the peer may apply CRDT/control.
+func (h *Hub) ClientReady(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clients[id]
+	return ok && c.Ready
+}
+
 // HandleSyncMessage applies a y-protocols sync frame.
+// Peers that have not acked hello are ignored (no apply, no reply).
 func (h *Hub) HandleSyncMessage(clientID string, msg []byte) ([]byte, error) {
+	if !h.ClientReady(clientID) {
+		return nil, fmt.Errorf("client not session-ready")
+	}
 	return ysync.ApplySyncMessage(h.Doc.Doc, msg, clientID)
 }
 

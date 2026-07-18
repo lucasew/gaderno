@@ -1,4 +1,4 @@
-import { mountEditors } from "./editor.js";
+import { createCollabSession } from "./editor.js";
 
 (function () {
   "use strict";
@@ -12,22 +12,59 @@ import { mountEditors } from "./editor.js";
 
   const cfg = window.__GADERNO__ || {};
   const path = cfg.path || "";
-  const statusEl = $("#status-pill");
-  const btnKernel = $("#btn-kernel");
+  const sessionDot = $("#session-dot");
+  const sessionLabel = $("#session-label");
+  const btnSession = $("#btn-session");
 
-  // Debounce timers per cell
-  const pending = new Map();
+  const NAME_KEY = "gaderno-display-name";
+  const collab = createCollabSession();
   let api = null;
   let ws = null;
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function kernelLabel() {
+    if (!kernelStatus || kernelStatus.needs_kernel || !kernelStatus.bound_name)
+      return "";
+    return (
+      kernelStatus.display_name ||
+      kernelStatus.bound_name ||
+      ""
+    ).trim();
+  }
+
+  /** e.g. "Live · Python 3" when a kernel is bound */
+  function withKernel(text) {
+    const k = kernelLabel();
+    if (!k || !text) return text || "";
+    // Avoid doubling if caller already appended the name
+    if (text.indexOf(k) !== -1) return text;
+    return text + " · " + k;
+  }
+
   function setStatus(text, state) {
-    if (!statusEl) return;
-    statusEl.textContent = text;
-    statusEl.className = "badge badge-xs";
-    if (state === "ok") statusEl.classList.add("badge-success");
-    else if (state === "run") statusEl.classList.add("badge-info");
-    else if (state === "err") statusEl.classList.add("badge-error");
-    else statusEl.classList.add("badge-ghost");
+    if (sessionDot) sessionDot.setAttribute("data-state", state || "off");
+    if (sessionLabel) sessionLabel.textContent = text || "";
+    if (btnSession) {
+      const needs =
+        kernelStatus && (kernelStatus.needs_kernel || !kernelStatus.bound_name);
+      let title = text || "Session";
+      if (needs) title = (text || "Session") + " · choose kernel";
+      else if (kernelLabel() && title.indexOf(kernelLabel()) === -1)
+        title = withKernel(text || "Session");
+      btnSession.title = title;
+      btnSession.setAttribute("aria-label", title);
+    }
+  }
+
+  function setLiveStatus(state) {
+    setStatus(withKernel("Live"), state || "ok");
   }
 
   function sendJSON(obj) {
@@ -36,49 +73,104 @@ import { mountEditors } from "./editor.js";
     return true;
   }
 
-  function flushSource(cellId) {
-    if (!api) return "";
-    const source = api.getSource(cellId);
-    sendJSON({ type: "cell.set_source", cell_id: cellId, source: source });
-    const t = pending.get(cellId);
-    if (t) {
-      clearTimeout(t);
-      pending.delete(cellId);
-    }
-    return source;
+  function sendBinary(u8) {
+    if (!ws || ws.readyState !== 1) return false;
+    ws.send(u8);
+    return true;
   }
 
-  function scheduleSource(cellId, source) {
-    setStatus("editing…", "run");
-    const prev = pending.get(cellId);
-    if (prev) clearTimeout(prev);
-    pending.set(
-      cellId,
-      setTimeout(function () {
-        pending.delete(cellId);
-        if (sendJSON({ type: "cell.set_source", cell_id: cellId, source: source })) {
-          // ack updates status
-        }
-      }, 200)
-    );
+  function flushSource(cellId) {
+    if (!api) return "";
+    return api.getSource(cellId);
   }
+
+  // —— Display name / avatar ——
+  function getDisplayName() {
+    try {
+      return (localStorage.getItem(NAME_KEY) || "").trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function setDisplayName(name) {
+    const n = String(name || "").trim().slice(0, 40);
+    try {
+      if (n) localStorage.setItem(NAME_KEY, n);
+      else localStorage.removeItem(NAME_KEY);
+    } catch (_) {}
+    updateAvatar(n);
+    if (api && typeof collab.setUserName === "function") {
+      collab.setUserName(n || undefined);
+    }
+  }
+
+  function updateAvatar(name) {
+    const el = $("#user-avatar");
+    if (!el) return;
+    const n = (name || getDisplayName() || "?").trim();
+    el.textContent = (n[0] || "?").toUpperCase();
+  }
+
+  const nameInput = $("#display-name");
+  if (nameInput) {
+    nameInput.value = getDisplayName();
+    nameInput.addEventListener("change", function () {
+      setDisplayName(nameInput.value);
+    });
+    nameInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        setDisplayName(nameInput.value);
+        const d = nameInput.closest("details");
+        if (d) d.open = false;
+      }
+    });
+  }
+  updateAvatar();
+
+  $all(".theme-set").forEach(function (b) {
+    b.addEventListener("click", function () {
+      const t = b.getAttribute("data-theme");
+      if (window.gadernoSetTheme) window.gadernoSetTheme(t);
+      const d = b.closest("details");
+      if (d) d.open = false;
+    });
+  });
+
+  // Per-tab hub lifetime fence (SPEC: session identity).
+  const sessionStorageKey = "gaderno.session:" + path;
+  let sessionReady = false;
 
   function connect() {
     if (!path) return;
+    sessionReady = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(proto + "://" + location.host + "/ws/notebooks/" + path);
-    ws.binaryType = "arraybuffer";
-    ws.onopen = function () {
-      setStatus("live", "ok");
+    const sock = new WebSocket(
+      proto + "://" + location.host + "/ws/notebooks/" + path
+    );
+    ws = sock;
+    sock.binaryType = "arraybuffer";
+    sock.onopen = function () {
+      setStatus("Connecting", "run");
     };
-    ws.onclose = function () {
-      setStatus("offline", "off");
+    sock.onclose = function () {
+      if (ws !== sock) return;
+      sessionReady = false;
+      setStatus("Offline", "off");
       setTimeout(connect, 1500);
     };
-    ws.onerror = function () {
-      setStatus("error", "err");
+    sock.onerror = function () {
+      if (ws !== sock) return;
+      setStatus("Error", "err");
     };
-    ws.onmessage = function (ev) {
+    sock.onmessage = function (ev) {
+      if (ws !== sock) return;
+      if (ev.data instanceof ArrayBuffer) {
+        if (!sessionReady) return;
+        collab.handleSyncMessage(new Uint8Array(ev.data));
+        return;
+      }
       if (typeof ev.data !== "string") return;
       let msg;
       try {
@@ -86,44 +178,108 @@ import { mountEditors } from "./editor.js";
       } catch (_) {
         return;
       }
-      if (msg.type === "cell.source_ack") {
-        setStatus("live", "ok");
-      } else if (msg.type === "exec.result") {
+      if (msg.type === "hello") {
+        const prev = sessionStorage.getItem(sessionStorageKey);
+        const sid = msg.session_id || "";
+        if (prev && sid && prev !== sid) {
+          sessionStorage.setItem(sessionStorageKey, sid);
+          try {
+            sock.close();
+          } catch (_) {}
+          location.reload();
+          return;
+        }
+        if (sid) sessionStorage.setItem(sessionStorageKey, sid);
+        sessionReady = true;
+        sendJSON({ type: "hello.ack", session_id: sid });
+        collab.attachTransport({
+          sendBinary: sendBinary,
+          sendJSON: sendJSON,
+        });
+        const dn = getDisplayName();
+        if (dn && typeof collab.setUserName === "function") collab.setUserName(dn);
+        setLiveStatus("ok");
+        applyKernelStatus(kernelStatus);
+        return;
+      }
+      if (!sessionReady) return;
+      if (msg.type === "awareness" && msg.update) {
+        collab.handleAwarenessB64(msg.update);
+      } else if (msg.type === "notebook.structure") {
+        applyStructure(msg.cells || []);
+      } else if (msg.type === "exec.clear") {
+        const cell = document.querySelector(
+          '.cell-row[data-cell-id="' + msg.cell_id + '"]'
+        );
+        if (!cell) return;
+        cell._streamBuf = { stdout: "", stderr: "" };
+        const out = $(".out-block", cell);
+        if (out) {
+          out.hidden = false;
+          out.textContent = "";
+          out.classList.remove("is-error");
+          out.classList.add("is-running");
+        }
+      } else if (msg.type === "exec.stream") {
         const cell = document.querySelector(
           '.cell-row[data-cell-id="' + msg.cell_id + '"]'
         );
         if (!cell) return;
         const out = $(".out-block", cell);
-        const prompt = $(".prompt-out", cell);
+        if (out) {
+          if (!cell._streamBuf) cell._streamBuf = { stdout: "", stderr: "" };
+          const name = msg.name === "stderr" ? "stderr" : "stdout";
+          cell._streamBuf[name] = msg.text || "";
+          out.hidden = false;
+          out.classList.add("is-running");
+          out.textContent =
+            (cell._streamBuf.stdout || "") + (cell._streamBuf.stderr || "");
+        }
+      } else if (msg.type === "exec.result") {
+        const cell = document.querySelector(
+          '.cell-row[data-cell-id="' + msg.cell_id + '"]'
+        );
+        if (!cell) return;
+        cell._streamBuf = {
+          stdout: msg.stdout || "",
+          stderr: msg.stderr || "",
+        };
+        const out = $(".out-block", cell);
+        const countEl = $(".cell-exec-count", cell);
+        const play = $(".cell-play", cell);
+        cell.classList.remove("is-running");
+        if (msg.status === "error") cell.classList.add("is-error");
+        else cell.classList.remove("is-error");
         if (out) {
           out.hidden = false;
-          out.classList.remove(
-            "border-info",
-            "text-info",
-            "border-error",
-            "bg-error/10",
-            "text-error"
-          );
-          if (msg.status === "error") {
-            out.classList.add("border-error", "bg-error/10", "text-error");
-          }
+          out.classList.remove("is-running");
+          if (msg.status === "error") out.classList.add("is-error");
+          else out.classList.remove("is-error");
           let t = "";
           if (msg.stdout) t += msg.stdout;
           if (msg.stderr) t += msg.stderr;
           if (msg.status === "error")
             t += (msg.ename || "Error") + ": " + (msg.evalue || "");
-          out.textContent = t || msg.status || "ok";
+          if (t) out.textContent = t;
+          else if (!out.textContent) out.textContent = msg.status || "ok";
         }
-        if (prompt && msg.execution_count != null) {
-          prompt.textContent = "Out[" + msg.execution_count + "]:";
+        if (countEl && msg.execution_count != null) {
+          countEl.textContent = "[" + msg.execution_count + "]";
+          countEl.setAttribute("data-count", String(msg.execution_count));
         }
-        setStatus("live", "ok");
-        const runBtn = $(".run", cell);
-        if (runBtn) runBtn.disabled = false;
+        setLiveStatus("ok");
+        if (play) {
+          play.disabled = false;
+          play.classList.remove("is-running");
+        }
       } else if (msg.type === "error") {
-        setStatus(msg.text || "error", "err");
-        $all("button.run").forEach(function (b) {
+        setStatus(msg.text || "Error", "err");
+        $all("button.cell-play").forEach(function (b) {
           b.disabled = false;
+          b.classList.remove("is-running");
+        });
+        $all(".cell-row.is-running").forEach(function (c) {
+          c.classList.remove("is-running");
         });
       } else if (msg.type === "kernel.status") {
         applyKernelStatus(msg.status);
@@ -133,96 +289,438 @@ import { mountEditors } from "./editor.js";
         const log = $("#chat-log");
         if (!log) return;
         const line = document.createElement("div");
-        line.className = "py-0.5";
+        line.className = "py-1";
         const who = document.createElement("span");
-        who.className = "font-code font-semibold text-primary mr-1";
+        who.className = "font-code font-semibold text-primary mr-1.5";
         who.textContent = msg.from || "?";
         line.appendChild(who);
         line.appendChild(document.createTextNode(msg.text || ""));
         log.appendChild(line);
         log.scrollTop = log.scrollHeight;
+      } else if (
+        msg.type === "complete.reply" ||
+        msg.type === "inspect.reply"
+      ) {
+        if (typeof collab.handleRPCReply === "function") {
+          collab.handleRPCReply(msg);
+        } else if (typeof collab.handleCompleteReply === "function") {
+          collab.handleCompleteReply(msg);
+        }
       }
     };
   }
 
-  // Mount editors
-  api = mountEditors(document.getElementById("cells") || document, {
-    onChange: scheduleSource,
+  function insertGapHTML(beforeId) {
+    const attr = beforeId
+      ? ' data-insert-before="' + escapeHtml(beforeId) + '"'
+      : " data-insert-end";
+    return (
+      '<div class="cell-insert' +
+      (beforeId ? "" : " cell-insert-end") +
+      '"' +
+      attr +
+      ' role="group" aria-label="Insert cell">' +
+      '<button type="button" class="cell-insert-btn" data-type="code" title="Insert code cell" aria-label="Insert code cell">' +
+      '<span aria-hidden="true">+</span><span class="cell-insert-label">Code</span></button>' +
+      '<button type="button" class="cell-insert-btn" data-type="markdown" title="Insert markdown cell" aria-label="Insert markdown cell">' +
+      '<span aria-hidden="true">+</span><span class="cell-insert-label">Markdown</span></button>' +
+      "</div>"
+    );
+  }
+
+  function buildCellHTML(c) {
+    const id = escapeHtml(c.id);
+    const typ = c.type === "markdown" ? "markdown" : "code";
+    const isCode = typ === "code";
+    let html = "";
+    html +=
+      '<article class="cell-row" data-cell-id="' +
+      id +
+      '" data-cell-type="' +
+      typ +
+      '">';
+    html += '<div class="cell-gutter">';
+    if (isCode) {
+      html +=
+        '<button type="button" class="cell-play run" data-cell-id="' +
+        id +
+        '" title="Run cell" aria-label="Run cell">' +
+        '<svg class="play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>' +
+        '<span class="loading loading-spinner loading-xs play-spin" hidden></span>' +
+        "</button>" +
+        '<span class="cell-exec-count font-code tabular" data-count></span>';
+    } else {
+      html +=
+        '<span class="cell-md-mark" title="Markdown" aria-hidden="true">¶</span>';
+    }
+    html += "</div>";
+    html += '<div class="cell-body min-w-0">';
+    html +=
+      '<div class="cell-toolbar"><span class="flex-1"></span>' +
+      '<details class="dropdown dropdown-end cell-menu">' +
+      '<summary class="g-icon-btn g-icon-btn-sm" title="Cell menu" aria-label="Cell menu">' +
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>' +
+      "</summary>" +
+      '<ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-44 p-1 shadow-md border border-base-300 text-xs">' +
+      '<li><button type="button" class="cell-type-set" data-cell-id="' +
+      id +
+      '" data-type="code">Type: Code</button></li>' +
+      '<li><button type="button" class="cell-type-set" data-cell-id="' +
+      id +
+      '" data-type="markdown">Type: Markdown</button></li>' +
+      '<li><hr class="my-0.5 border-base-300"></li>' +
+      '<li><button type="button" class="cell-up" data-cell-id="' +
+      id +
+      '">Move up</button></li>' +
+      '<li><button type="button" class="cell-down" data-cell-id="' +
+      id +
+      '">Move down</button></li>' +
+      '<li><hr class="my-0.5 border-base-300"></li>' +
+      '<li><button type="button" class="cell-del text-error" data-cell-id="' +
+      id +
+      '">Delete</button></li>' +
+      "</ul></details></div>";
+    if (!isCode) {
+      html +=
+        '<div class="md-preview" tabindex="0" role="button" aria-label="Edit markdown"></div>';
+    }
+    html +=
+      '<div class="cm-host' +
+      (isCode ? "" : " is-md-edit") +
+      '" data-gaderno-editor data-cell-id="' +
+      id +
+      '" data-lang="' +
+      (isCode ? "python" : "markdown") +
+      '"' +
+      (isCode ? "" : " hidden") +
+      "></div>";
+    if (isCode) {
+      html += '<div class="out-block" hidden></div>';
+    }
+    html += "</div></article>";
+    return html;
+  }
+
+  function syncMarkdownPreviews(root) {
+    if (!api) return;
+    $all('.cell-row[data-cell-type="markdown"]', root || document).forEach(
+      function (cell) {
+        const id = cell.getAttribute("data-cell-id");
+        const preview = $(".md-preview", cell);
+        const host = $("[data-gaderno-editor]", cell);
+        if (!preview || !host || !host.hidden) return;
+        preview.textContent = api.getSource(id) || "";
+      }
+    );
+  }
+
+  function enterMarkdownEdit(cell) {
+    if (!cell || !api) return;
+    const id = cell.getAttribute("data-cell-id");
+    const preview = $(".md-preview", cell);
+    const host = $("[data-gaderno-editor]", cell);
+    if (!preview || !host) return;
+    preview.hidden = true;
+    host.hidden = false;
+    api.focus(id);
+  }
+
+  function exitMarkdownEdit(cell) {
+    if (!cell || !api) return;
+    const id = cell.getAttribute("data-cell-id");
+    const preview = $(".md-preview", cell);
+    const host = $("[data-gaderno-editor]", cell);
+    if (!preview || !host) return;
+    preview.textContent = api.getSource(id) || "";
+    preview.hidden = false;
+    host.hidden = true;
+  }
+
+  function rebuildInsertGaps(root) {
+    // Remove existing gaps then reinsert around cells
+    $all(".cell-insert", root).forEach(function (g) {
+      g.remove();
+    });
+    const rows = $all(":scope > .cell-row", root);
+    if (rows.length === 0) return;
+    rows.forEach(function (row) {
+      const id = row.getAttribute("data-cell-id");
+      const tmp = document.createElement("div");
+      tmp.innerHTML = insertGapHTML(id);
+      const gap = tmp.firstElementChild;
+      if (gap) root.insertBefore(gap, row);
+    });
+    const tmpEnd = document.createElement("div");
+    tmpEnd.innerHTML = insertGapHTML(null);
+    const end = tmpEnd.firstElementChild;
+    if (end) root.appendChild(end);
+  }
+
+  function applyStructure(cells) {
+    const root = document.getElementById("cells");
+    if (!root || !Array.isArray(cells)) return;
+    const seen = new Set();
+    const unique = [];
+    cells.forEach(function (c) {
+      if (!c || !c.id || seen.has(c.id)) return;
+      seen.add(c.id);
+      unique.push(c);
+    });
+
+    $all(":scope > :not(.cell-row)", root).forEach(function (el) {
+      el.remove();
+    });
+
+    if (unique.length === 0) {
+      root.innerHTML =
+        '<div class="g-empty g-empty-cells" id="empty-notebook">' +
+        '<p class="font-medium">Empty notebook</p>' +
+        '<p class="text-sm text-base-content/55 mt-1 mb-4">Add a first cell to begin.</p>' +
+        '<div class="flex flex-wrap gap-2 justify-center">' +
+        '<button type="button" class="btn btn-primary btn-sm gap-1" id="btn-first-code"><span aria-hidden="true">+</span> Code</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm gap-1" id="btn-first-md"><span aria-hidden="true">+</span> Markdown</button>' +
+        "</div></div>";
+      api = collab.mountEditors(root);
+      return;
+    }
+
+    const byId = new Map();
+    $all(".cell-row", root).forEach(function (el) {
+      const id = el.getAttribute("data-cell-id");
+      if (id) byId.set(id, el);
+    });
+
+    unique.forEach(function (c) {
+      const typ = c.type === "markdown" ? "markdown" : "code";
+      let el = byId.get(c.id);
+      if (el && el.getAttribute("data-cell-type") === typ) return;
+      if (el) {
+        el.remove();
+        byId.delete(c.id);
+      }
+      const tmp = document.createElement("div");
+      tmp.innerHTML = buildCellHTML(c);
+      el = tmp.firstElementChild;
+      if (!el) return;
+      root.appendChild(el);
+      byId.set(c.id, el);
+    });
+
+    const want = new Set(
+      unique.map(function (c) {
+        return c.id;
+      })
+    );
+    byId.forEach(function (el, id) {
+      if (!want.has(id)) {
+        el.remove();
+        byId.delete(id);
+      }
+    });
+
+    unique.forEach(function (c, i) {
+      const el = byId.get(c.id);
+      if (!el || el.parentNode !== root) return;
+      // children include only cell-rows at this point
+      const rows = $all(":scope > .cell-row", root);
+      const ref = rows[i];
+      if (ref !== el) {
+        root.insertBefore(el, ref || null);
+      }
+    });
+
+    rebuildInsertGaps(root);
+    api = collab.mountEditors(root);
+    syncMarkdownPreviews(root);
+  }
+
+  // Initial mount
+  api = collab.mountEditors(document.getElementById("cells") || document);
+  syncMarkdownPreviews(document.getElementById("cells"));
+
+  // Seed markdown previews from SSR JSON if collab not yet filled
+  $all(".cell-row[data-cell-type='markdown']").forEach(function (cell) {
+    const id = cell.getAttribute("data-cell-id");
+    const preview = $(".md-preview", cell);
+    const jsonEl = $('.cell-source-json[data-cell-id="' + id + '"]', cell) ||
+      $('.cell-source-json[data-cell-id="' + id + '"]');
+    if (!preview || preview.textContent) return;
+    if (jsonEl) {
+      try {
+        preview.textContent = JSON.parse(jsonEl.textContent || '""') || "";
+      } catch (_) {}
+    }
   });
 
+  function closeMenus() {
+    document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+      d.open = false;
+    });
+  }
+
+  function insertCell(type, index) {
+    sendJSON({ type: "cell.insert", text: type, index: index });
+  }
+
+  function indexOfCell(id) {
+    const rows = $all("#cells .cell-row");
+    return rows.findIndex(function (r) {
+      return r.getAttribute("data-cell-id") === id;
+    });
+  }
+
   document.addEventListener("click", function (e) {
-    const run = e.target.closest("button.run");
-    if (run) {
-      const id = run.dataset.cellId;
+    const play = e.target.closest("button.cell-play, button.run");
+    if (play) {
+      const id = play.dataset.cellId;
       if (!id || !ws || ws.readyState !== 1) {
-        setStatus("not connected", "err");
+        setStatus("Not connected", "err");
         return;
       }
-      run.disabled = true;
-      setStatus("running", "run");
+      play.disabled = true;
+      play.classList.add("is-running");
+      setStatus("Running", "run");
       const source = flushSource(id);
-      const cell = run.closest(".cell-row");
+      const cell = play.closest(".cell-row");
+      if (cell) cell.classList.add("is-running");
       const out = cell && $(".out-block", cell);
       if (out) {
         out.hidden = false;
-        out.classList.remove("border-error", "bg-error/10", "text-error");
-        out.classList.add("border-info", "text-info");
+        out.classList.remove("is-error");
+        out.classList.add("is-running");
         out.textContent = "…";
       }
-      // flush source on run so kernel sees latest
       sendJSON({ type: "exec.run", cell_id: id, source: source });
       return;
     }
 
-    const mdToggle = e.target.closest("button.md-toggle");
-    if (mdToggle) {
-      const cell = mdToggle.closest(".cell-row");
-      if (!cell || !api) return;
-      const id = cell.getAttribute("data-cell-id");
-      const preview = $(".md-preview", cell);
-      const host = $("[data-gaderno-editor]", cell);
-      if (!preview || !host) return;
-      const editing = mdToggle.dataset.mode === "edit";
-      if (editing) {
-        // switch to preview
-        mdToggle.dataset.mode = "preview";
-        mdToggle.textContent = "Edit";
-        preview.textContent = api.getSource(id);
-        preview.hidden = false;
-        host.hidden = true;
+    const mdPreview = e.target.closest(".md-preview");
+    if (mdPreview) {
+      enterMarkdownEdit(mdPreview.closest(".cell-row"));
+      return;
+    }
+
+    const typeSet = e.target.closest("button.cell-type-set");
+    if (typeSet) {
+      const id = typeSet.dataset.cellId;
+      const typ = typeSet.dataset.type;
+      if (!id || !typ) return;
+      closeMenus();
+      sendJSON({ type: "cell.set_type", cell_id: id, text: typ });
+      return;
+    }
+
+    const insertBtn = e.target.closest(".cell-insert-btn");
+    if (insertBtn) {
+      const typ = insertBtn.getAttribute("data-type") || "code";
+      const gap = insertBtn.closest(".cell-insert");
+      if (!gap) return;
+      if (gap.hasAttribute("data-insert-end")) {
+        insertCell(typ, $all("#cells .cell-row").length);
       } else {
-        mdToggle.dataset.mode = "edit";
-        mdToggle.textContent = "Preview";
-        preview.hidden = true;
-        host.hidden = false;
-        api.focus(id);
+        const before = gap.getAttribute("data-insert-before");
+        const idx = indexOfCell(before);
+        insertCell(typ, idx >= 0 ? idx : 0);
       }
       return;
     }
 
-    const save = e.target.closest("#btn-save");
-    if (save) {
-      // flush all editors first
-      $all("[data-gaderno-editor]").forEach(function (host) {
-        flushSource(host.getAttribute("data-cell-id"));
-      });
-      setStatus("saving", "run");
-      setTimeout(function () {
-        fetch("/api/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: path }),
-        })
-          .then(function (r) {
-            setStatus(r.ok ? "saved" : "save failed", r.ok ? "ok" : "err");
-            if (r.ok) setTimeout(function () { setStatus("live", "ok"); }, 800);
-          })
-          .catch(function () {
-            setStatus("save failed", "err");
-          });
-      }, 50);
+    if (e.target.closest("#btn-first-code")) {
+      insertCell("code", 0);
+      return;
+    }
+    if (e.target.closest("#btn-first-md")) {
+      insertCell("markdown", 0);
+      return;
+    }
+
+    const del = e.target.closest(".cell-del");
+    if (del) {
+      const id = del.dataset.cellId;
+      if (!id) return;
+      if (!confirm("Delete this cell?")) return;
+      closeMenus();
+      sendJSON({ type: "cell.delete", cell_id: id });
+      return;
+    }
+    const up = e.target.closest(".cell-up");
+    if (up) {
+      const id = up.dataset.cellId;
+      const idx = indexOfCell(id);
+      closeMenus();
+      if (idx > 0) sendJSON({ type: "cell.move", cell_id: id, index: idx - 1 });
+      return;
+    }
+    const down = e.target.closest(".cell-down");
+    if (down) {
+      const id = down.dataset.cellId;
+      const rows = $all("#cells .cell-row");
+      const idx = indexOfCell(id);
+      closeMenus();
+      if (idx >= 0 && idx < rows.length - 1)
+        sendJSON({ type: "cell.move", cell_id: id, index: idx + 1 });
+      return;
     }
   });
+
+  // Blur markdown editor → preview
+  document.addEventListener(
+    "focusout",
+    function (e) {
+      const host = e.target.closest && e.target.closest(".cm-host.is-md-edit, .cm-host[data-lang='markdown']");
+      if (!host) return;
+      const cell = host.closest(".cell-row");
+      if (!cell || cell.getAttribute("data-cell-type") !== "markdown") return;
+      // Defer so click-into-toolbar still works
+      setTimeout(function () {
+        if (cell.contains(document.activeElement)) return;
+        if (host.hidden) return;
+        exitMarkdownEdit(cell);
+      }, 120);
+    },
+    true
+  );
+
+  // —— Chat panel ——
+  const chatPanel = document.getElementById("chat-panel");
+  const btnChat = document.getElementById("btn-chat");
+  const btnChatClose = document.getElementById("btn-chat-close");
+  const CHAT_KEY = "gaderno-chat-open";
+
+  function setChatOpen(open) {
+    if (!chatPanel) return;
+    chatPanel.dataset.open = open ? "true" : "false";
+    chatPanel.setAttribute("aria-hidden", open ? "false" : "true");
+    if (btnChat) {
+      btnChat.setAttribute("aria-expanded", open ? "true" : "false");
+      btnChat.classList.toggle("g-active", open);
+    }
+    try {
+      localStorage.setItem(CHAT_KEY, open ? "1" : "0");
+    } catch (_) {}
+    if (open) {
+      const input = document.getElementById("chat-input");
+      if (input) setTimeout(function () {
+        input.focus();
+      }, 200);
+    }
+  }
+
+  function toggleChat() {
+    if (!chatPanel) return;
+    setChatOpen(chatPanel.dataset.open !== "true");
+  }
+
+  if (btnChat) btnChat.addEventListener("click", toggleChat);
+  if (btnChatClose)
+    btnChatClose.addEventListener("click", function () {
+      setChatOpen(false);
+    });
+  try {
+    setChatOpen(localStorage.getItem(CHAT_KEY) === "1");
+  } catch (_) {
+    setChatOpen(false);
+  }
 
   const chatForm = $("#chat-form");
   if (chatForm) {
@@ -236,123 +734,198 @@ import { mountEditors } from "./editor.js";
     });
   }
 
-
-  // —— Collapsible chat sidebar (Docs-style) ——
-  const chatRail = document.getElementById("chat-rail");
-  const btnChat = document.getElementById("btn-chat");
-  const btnChatClose = document.getElementById("btn-chat-close");
-  const CHAT_KEY = "gaderno-chat-open";
-
-  function setChatOpen(open) {
-    if (!chatRail) return;
-    chatRail.dataset.open = open ? "true" : "false";
-    chatRail.setAttribute("aria-hidden", open ? "false" : "true");
-    if (btnChat) {
-      btnChat.setAttribute("aria-expanded", open ? "true" : "false");
-      btnChat.classList.toggle("btn-active", open);
-    }
-    try {
-      localStorage.setItem(CHAT_KEY, open ? "1" : "0");
-    } catch (_) {}
-    if (open) {
-      const input = document.getElementById("chat-input");
-      if (input) setTimeout(function () { input.focus(); }, 180);
-    }
-  }
-
-  function toggleChat() {
-    if (!chatRail) return;
-    setChatOpen(chatRail.dataset.open !== "true");
-  }
-
-  if (btnChat) btnChat.addEventListener("click", toggleChat);
-  if (btnChatClose) btnChatClose.addEventListener("click", function () { setChatOpen(false); });
-
-  // Restore preference (default closed — more room for editors)
-  try {
-    setChatOpen(localStorage.getItem(CHAT_KEY) === "1");
-  } catch (_) {
-    setChatOpen(false);
-  }
-
-
   // —— Kernel chooser ——
   const kernelDialog = document.getElementById("kernel-dialog");
   const kernelList = document.getElementById("kernel-list");
-  let kernelStatus = { needs_kernel: true, bound_name: "", display_name: "", phase: "needs_kernel" };
+  const kernelFilter = document.getElementById("kernel-filter");
+  const kernelDialogHint = document.getElementById("kernel-dialog-hint");
+  let kernelStatus = {
+    needs_kernel: true,
+    bound_name: "",
+    display_name: "",
+    phase: "needs_kernel",
+    running: false,
+  };
+  let autoOpenedChooser = false;
+  let kernelCatalog = null;
 
   function applyKernelStatus(st) {
     if (!st) return;
     kernelStatus = st;
-    if (btnKernel) {
-      if (st.needs_kernel || !st.bound_name) {
-        btnKernel.textContent = "Select kernel…";
-        btnKernel.classList.add("text-warning");
-      } else {
-        const label = st.display_name || st.bound_name;
-        const run = st.running ? " · on" : "";
-        btnKernel.textContent = label + run;
-        btnKernel.classList.remove("text-warning");
-        btnKernel.title = st.bound_name + " (" + st.phase + ")";
-      }
+    const needs = st.needs_kernel || !st.bound_name;
+    // Don't override live/offline connection label unless connected
+    if (sessionReady) {
+      if (needs) setStatus("Pick kernel", "warn");
+      else if (st.phase === "busy" || st.running)
+        setStatus(withKernel("Busy"), "run");
+      else if (st.phase === "starting")
+        setStatus(withKernel("Starting"), "run");
+      else if (st.phase === "dead")
+        setStatus(withKernel("Kernel error"), "err");
+      else setLiveStatus("ok");
     }
-    if (st.needs_kernel && kernelDialog && !kernelDialog.open) {
-      // auto-open chooser once when needed
+    if (needs && kernelDialog && !kernelDialog.open && !autoOpenedChooser) {
+      autoOpenedChooser = true;
       openKernelChooser();
+    }
+  }
+
+  function renderKernelList(filter) {
+    if (!kernelList) return;
+    const q = (filter || "").trim().toLowerCase();
+    const groups = (kernelCatalog && kernelCatalog.groups) || {};
+    const order = ["jupyter", "uv"];
+    const titles = { jupyter: "Jupyter", uv: "uv" };
+    const blurb = {
+      jupyter: "Installed kernelspecs on this machine",
+      uv: "Managed by uv (starts with ipykernel on first play)",
+    };
+
+    let html = "";
+    let shown = 0;
+    order.forEach(function (g) {
+      let items = groups[g] || [];
+      if (q) {
+        items = items.filter(function (k) {
+          const hay = (
+            (k.display_name || "") +
+            " " +
+            (k.name || "") +
+            " " +
+            (k.language || "")
+          ).toLowerCase();
+          return hay.indexOf(q) >= 0;
+        });
+      }
+      if (!items.length) return;
+      html += '<div class="px-1 pt-2 first:pt-1">';
+      html +=
+        '<div class="px-2 pb-1">' +
+        '<div class="text-[0.65rem] font-semibold uppercase tracking-wide text-base-content/45">' +
+        titles[g] +
+        "</div>" +
+        '<div class="text-[0.65rem] text-base-content/40 leading-snug">' +
+        blurb[g] +
+        "</div></div>";
+      html += '<ul class="menu menu-sm p-0 gap-0 rounded-none w-full">';
+      items.forEach(function (k) {
+        shown++;
+        const active = kernelStatus.bound_name === k.name;
+        const name = escapeHtml(k.name);
+        const disp = escapeHtml(k.display_name || k.name);
+        const lang = escapeHtml(k.language || "");
+        html += '<li class="w-full">';
+        html +=
+          '<button type="button" class="kernel-pick w-full rounded-none' +
+          (active ? " menu-active" : "") +
+          '" data-name="' +
+          name +
+          '">';
+        html += '<div class="flex items-center gap-2 w-full min-w-0 py-0.5">';
+        html +=
+          '<span class="flex h-4 w-4 shrink-0 items-center justify-center text-[0.7rem]" aria-hidden="true">' +
+          (active ? "✓" : "") +
+          "</span>";
+        html += '<div class="min-w-0 flex-1 text-left">';
+        html +=
+          '<div class="truncate text-xs font-medium leading-tight">' +
+          disp +
+          "</div>";
+        html +=
+          '<div class="truncate font-code text-[0.65rem] text-base-content/45 leading-tight">' +
+          name +
+          "</div>";
+        html += "</div>";
+        if (lang) {
+          html +=
+            '<span class="badge badge-ghost badge-xs shrink-0 font-normal">' +
+            lang +
+            "</span>";
+        }
+        html += "</div></button></li>";
+      });
+      html += "</ul></div>";
+    });
+
+    if (!shown) {
+      html =
+        '<div class="px-4 py-10 text-center text-xs text-base-content/50">' +
+        (q
+          ? "No kernels match “" + escapeHtml(q) + "”."
+          : "No kernels found. Install a Jupyter kernelspec or uv.") +
+        "</div>";
+    }
+    kernelList.innerHTML = html;
+    if (kernelDialogHint) {
+      kernelDialogHint.textContent = shown
+        ? shown + " available"
+        : "Nothing to show";
     }
   }
 
   async function openKernelChooser() {
     if (!kernelDialog || !kernelList) return;
-    kernelList.innerHTML = '<p class="text-base-content/50 px-1 py-2">Loading…</p>';
+    if (kernelFilter) kernelFilter.value = "";
+    kernelList.innerHTML =
+      '<div class="flex items-center justify-center gap-2 py-10 text-base-content/50 text-xs">' +
+      '<span class="loading loading-spinner loading-xs"></span>Loading kernels…</div>';
     kernelDialog.showModal();
+    if (kernelFilter)
+      setTimeout(function () {
+        kernelFilter.focus();
+      }, 50);
     try {
       const r = await fetch("/api/kernels");
-      const data = await r.json();
-      const groups = data.groups || {};
-      const order = ["jupyter", "uv"];
-      const titles = { jupyter: "Jupyter", uv: "uv" };
-      let html = "";
-      let any = false;
-      order.forEach(function (g) {
-        const items = groups[g] || [];
-        if (!items.length) return;
-        any = true;
-        html += '<div class="mb-2">';
-        html += '<div class="text-[0.625rem] uppercase tracking-wide font-semibold text-base-content/45 px-1 py-1">' + titles[g] + "</div>";
-        items.forEach(function (k) {
-          const sel = kernelStatus.bound_name === k.name ? " border-primary bg-primary/10" : "";
-          html +=
-            '<button type="button" class="kernel-pick btn btn-ghost btn-sm w-full justify-start font-normal h-auto min-h-0 py-1.5 px-2 mb-0.5 border border-transparent' +
-            sel +
-            '" data-name="' +
-            k.name.replace(/"/g, "&quot;") +
-            '">';
-          html += '<span class="truncate text-left"><span class="font-medium">' + escapeHtml(k.display_name || k.name) + "</span>";
-          html += '<span class="block text-[0.625rem] text-base-content/45 font-code">' + escapeHtml(k.name) + "</span></span></button>";
-        });
-        html += "</div>";
-      });
-      if (!any) {
-        html = '<p class="text-base-content/50 px-1 py-2">No kernels found. Install a Jupyter kernelspec or <span class="font-code">uv</span>.</p>';
-      }
-      kernelList.innerHTML = html;
+      if (!r.ok) throw new Error("load failed");
+      kernelCatalog = await r.json();
+      renderKernelList("");
     } catch (e) {
-      kernelList.innerHTML = '<p class="text-error px-1 py-2">Failed to load kernels</p>';
+      kernelList.innerHTML =
+        '<div class="px-4 py-10 text-center text-xs text-error">Could not load kernels.</div>';
     }
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+  if (btnSession) {
+    btnSession.addEventListener("click", function () {
+      openKernelChooser();
+    });
+  }
+  const menuKernel = $("#menu-kernel");
+  if (menuKernel) {
+    menuKernel.addEventListener("click", function () {
+      closeMenus();
+      openKernelChooser();
+    });
+  }
+  const menuForceSave = $("#menu-force-save");
+  if (menuForceSave) {
+    menuForceSave.addEventListener("click", function () {
+      closeMenus();
+      setStatus("Saving…", "run");
+      fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path }),
+      })
+        .then(function (r) {
+          setStatus(
+            r.ok ? withKernel("Saved") : "Save failed",
+            r.ok ? "ok" : "err"
+          );
+          if (r.ok)
+            setTimeout(function () {
+              if (sessionReady) setLiveStatus("ok");
+            }, 900);
+        })
+        .catch(function () {
+          setStatus("Save failed", "err");
+        });
+    });
   }
 
-  if (btnKernel) {
-    btnKernel.addEventListener("click", function () {
-      openKernelChooser();
+  if (kernelFilter) {
+    kernelFilter.addEventListener("input", function () {
+      renderKernelList(kernelFilter.value);
     });
   }
   if (kernelList) {
@@ -362,28 +935,36 @@ import { mountEditors } from "./editor.js";
       const name = b.getAttribute("data-name");
       if (!name) return;
       b.disabled = true;
+      const prev = b.innerHTML;
+      b.innerHTML =
+        '<span class="loading loading-spinner loading-xs"></span><span class="text-xs">Binding…</span>';
       fetch("/api/kernel/bind", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: path, name: name }),
       })
         .then(function (r) {
-          if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.statusText); });
+          if (!r.ok)
+            return r.text().then(function (t) {
+              throw new Error(t || r.statusText);
+            });
           return r.json();
         })
         .then(function (st) {
           applyKernelStatus(st);
           if (kernelDialog) kernelDialog.close();
-          setStatus("kernel bound", "ok");
-          setTimeout(function () { setStatus("live", "ok"); }, 600);
+          setStatus(withKernel("Kernel ready"), "ok");
+          setTimeout(function () {
+            if (sessionReady) setLiveStatus("ok");
+          }, 600);
         })
         .catch(function (err) {
           setStatus(String(err.message || err), "err");
           b.disabled = false;
+          b.innerHTML = prev;
         });
     });
   }
 
-  // patch message handler additions via monkey - insert into onmessage by replacing
   if (path) connect();
 })();

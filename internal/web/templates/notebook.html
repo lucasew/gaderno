@@ -19,112 +19,185 @@
   </script>
 </head>
 <body class="h-full min-h-0 flex flex-col bg-base-100 text-base-content text-sm overflow-hidden">
-  <header class="navbar g-navbar sticky top-0 z-50 shrink-0 bg-base-200 border-b border-base-300 px-2 sm:px-3 gap-1 sm:gap-2">
-    <div class="navbar-start gap-1 min-w-0 flex-1">
-      <a href="/" class="btn btn-ghost btn-xs font-bold tracking-tight normal-case shrink-0">gaderno</a>
-      <span class="text-base-content/40 shrink-0">·</span>
-      <span class="font-code text-xs truncate min-w-0" title="{{ .Path }}">{{ .Path }}</span>
-    </div>
-    <div class="navbar-end gap-1 shrink-0">
-      <button type="button" class="btn btn-ghost btn-xs font-code max-w-[10rem] truncate" id="btn-kernel" title="Select kernel">Select kernel…</button>
-      <span class="badge badge-xs badge-ghost" id="status-pill" data-state="off">offline</span>
-      <a class="btn btn-ghost btn-xs" href="/api/notebooks/{{ .Path }}?download=1">Export</a>
-      <button type="button" class="btn btn-primary btn-xs" id="btn-save">Save</button>
-      <button type="button" class="btn btn-ghost btn-xs" id="btn-chat" aria-controls="chat-rail" aria-expanded="false" title="Toggle chat sidebar">
-        Chat
+  <header class="g-topbar sticky top-0 z-50 shrink-0 bg-base-100/90 backdrop-blur-sm border-b border-base-300">
+    <div class="g-topbar-inner">
+      <a href="/" class="g-logo" title="gaderno" aria-label="gaderno home">G</a>
+      <span class="g-topbar-path font-code truncate min-w-0" title="{{ .Path }}">{{ .Path }}</span>
+      <span class="flex-1 min-w-1"></span>
+
+      <button type="button" class="g-icon-btn g-session-btn" id="btn-session" title="Session & kernel" aria-label="Session status and kernel">
+        <span class="g-session-dot" id="session-dot" data-state="off" aria-hidden="true"></span>
+        <span class="g-session-label hidden sm:inline" id="session-label">Offline</span>
       </button>
-      <label class="swap swap-rotate btn btn-ghost btn-xs" title="Theme">
-        <input type="checkbox" class="theme-controller" value="gaderno-dark" id="theme-toggle" />
-        <span class="swap-off text-xs">☀</span>
-        <span class="swap-on text-xs">☾</span>
-      </label>
+
+      <button type="button" class="g-icon-btn" id="btn-chat" aria-controls="chat-panel" aria-expanded="false" title="Chat" aria-label="Open chat">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      </button>
+
+      <details class="dropdown dropdown-end" id="avatar-menu">
+        <summary class="g-icon-btn" aria-label="Account menu" title="Menu">
+          <span class="g-avatar" id="user-avatar" aria-hidden="true">·</span>
+        </summary>
+        <ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-56 p-2 shadow-md border border-base-300 text-sm mt-1">
+          <li class="menu-title text-xs px-2">Display name</li>
+          <li class="px-2 pb-2">
+            <input type="text" id="display-name" class="input input-bordered input-sm w-full" placeholder="Your name" autocomplete="nickname" />
+          </li>
+          <li class="menu-title text-xs">Theme</li>
+          <li><button type="button" class="theme-set" data-theme="gaderno-light">Light</button></li>
+          <li><button type="button" class="theme-set" data-theme="gaderno-dark">Dark</button></li>
+          <li class="menu-title text-xs">Notebook</li>
+          <li><button type="button" id="menu-kernel">Kernel…</button></li>
+          <li><button type="button" id="menu-force-save">Force save</button></li>
+          <li><a href="/api/notebooks/{{ .Path }}?download=1" id="menu-export">Export .ipynb</a></li>
+          <li class="menu-title text-xs">About</li>
+          <li><span class="text-xs text-base-content/55 pointer-events-none break-all" id="menu-about-path">{{ .Path }}</span></li>
+        </ul>
+      </details>
     </div>
   </header>
 
-  <div class="flex flex-1 min-h-0 relative">
-    <main class="flex-1 min-w-0 overflow-y-auto py-1" id="cells">
-      {{ range .Cells }}
-      <article class="cell-row border-b border-base-300 px-2 py-2 hover:bg-base-200/40" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
-        <div class="flex flex-col items-end pt-2 gap-0.5 select-none">
-          {{ if eq .Type "code" }}
-          <span class="font-code text-[0.6875rem] tabular text-primary font-semibold prompt-in">In&nbsp;[ ]:</span>
-          <span class="font-code text-[0.6875rem] tabular text-base-content/50 prompt-out"></span>
-          {{ else }}
-          <span class="font-code text-[0.6875rem] text-base-content/50">Md</span>
-          {{ end }}
-        </div>
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-1 min-h-5 mb-1">
-            <span class="text-[0.625rem] uppercase tracking-wide text-base-content/50 font-semibold">{{ .Type }}</span>
-            {{ if eq .Type "code" }}
-            <button type="button" class="btn btn-primary btn-xs run" data-cell-id="{{ .ID }}">Run</button>
-            {{ else if eq .Type "markdown" }}
-            <button type="button" class="btn btn-ghost btn-xs md-toggle" data-mode="edit">Preview</button>
-            {{ end }}
-          </div>
-          {{ if eq .Type "markdown" }}
-          <div class="md-preview text-sm whitespace-pre-wrap" hidden></div>
-          {{ end }}
-          <script type="application/json" class="cell-source-json" data-cell-id="{{ .ID }}">{{ .SourceJSON }}</script>
-          <div
-            class="cm-host"
-            data-gaderno-editor
-            data-cell-id="{{ .ID }}"
-            data-lang="{{ if eq .Type "markdown" }}markdown{{ else }}python{{ end }}"
-          ></div>
-          {{ if eq .Type "code" }}
-          <div class="out-block mt-1.5 p-2 bg-base-100 border border-base-300 rounded-field font-code text-xs whitespace-pre-wrap break-words" hidden></div>
-          {{ end }}
-        </div>
-      </article>
-      {{ else }}
-      <p class="text-xs text-base-content/50 p-3">Empty notebook.</p>
-      {{ end }}
-    </main>
-
-    {{/* Collapsible right sidebar (Docs-style panel) */}}
-    <aside
-      id="chat-rail"
-      class="chat-rail"
-      data-open="false"
-      aria-label="Session chat"
-      aria-hidden="true"
-    >
-      <div class="chat-rail-inner flex flex-col h-full min-h-0 bg-base-200/50 border-l border-base-300">
-        <div class="shrink-0 h-9 px-2 border-b border-base-300 flex items-center justify-between gap-1">
-          <div class="min-w-0">
-            <div class="text-xs font-semibold leading-tight">Chat</div>
-            <div class="text-[0.625rem] text-base-content/45 leading-tight">Session only · not saved</div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-xs btn-square" id="btn-chat-close" aria-label="Close chat sidebar" title="Close">
-            ✕
+  <div class="flex-1 min-h-0 relative flex flex-col">
+    <main class="flex-1 min-h-0 overflow-y-auto" id="cells-scroll">
+      <div class="g-cells" id="cells">
+        {{ range .Cells }}
+        <div class="cell-insert" data-insert-before="{{ .ID }}" role="group" aria-label="Insert cell">
+          <button type="button" class="cell-insert-btn" data-type="code" title="Insert code cell" aria-label="Insert code cell">
+            <span aria-hidden="true">+</span><span class="cell-insert-label">Code</span>
+          </button>
+          <button type="button" class="cell-insert-btn" data-type="markdown" title="Insert markdown cell" aria-label="Insert markdown cell">
+            <span aria-hidden="true">+</span><span class="cell-insert-label">Markdown</span>
           </button>
         </div>
-        <div class="flex-1 min-h-0 overflow-y-auto px-2 py-1.5 text-xs text-base-content/75" id="chat-log" aria-live="polite"></div>
-        <form class="shrink-0 flex flex-col gap-1 p-2 border-t border-base-300" id="chat-form">
+        <article class="cell-row" data-cell-id="{{ .ID }}" data-cell-type="{{ .Type }}">
+          <div class="cell-gutter">
+            {{ if eq .Type "code" }}
+            <button type="button" class="cell-play run" data-cell-id="{{ .ID }}" title="Run cell" aria-label="Run cell">
+              <svg class="play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              <span class="loading loading-spinner loading-xs play-spin" hidden></span>
+            </button>
+            <span class="cell-exec-count font-code tabular" data-count></span>
+            {{ else }}
+            <span class="cell-md-mark" title="Markdown" aria-hidden="true">¶</span>
+            {{ end }}
+          </div>
+          <div class="cell-body min-w-0">
+            <div class="cell-toolbar">
+              <span class="flex-1"></span>
+              <details class="dropdown dropdown-end cell-menu">
+                <summary class="g-icon-btn g-icon-btn-sm" title="Cell menu" aria-label="Cell menu">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                </summary>
+                <ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-44 p-1 shadow-md border border-base-300 text-xs">
+                  <li><button type="button" class="cell-type-set" data-cell-id="{{ .ID }}" data-type="code">Type: Code</button></li>
+                  <li><button type="button" class="cell-type-set" data-cell-id="{{ .ID }}" data-type="markdown">Type: Markdown</button></li>
+                  <li><hr class="my-0.5 border-base-300"></li>
+                  <li><button type="button" class="cell-up" data-cell-id="{{ .ID }}">Move up</button></li>
+                  <li><button type="button" class="cell-down" data-cell-id="{{ .ID }}">Move down</button></li>
+                  <li><hr class="my-0.5 border-base-300"></li>
+                  <li><button type="button" class="cell-del text-error" data-cell-id="{{ .ID }}">Delete</button></li>
+                </ul>
+              </details>
+            </div>
+            {{ if eq .Type "markdown" }}
+            <div class="md-preview" tabindex="0" role="button" aria-label="Edit markdown"></div>
+            {{ end }}
+            <script type="application/json" class="cell-source-json" data-cell-id="{{ .ID }}">{{ .SourceJSON }}</script>
+            <div
+              class="cm-host{{ if eq .Type "markdown" }} is-md-edit{{ end }}"
+              data-gaderno-editor
+              data-cell-id="{{ .ID }}"
+              data-lang="{{ if eq .Type "markdown" }}markdown{{ else }}python{{ end }}"
+              {{ if eq .Type "markdown" }}hidden{{ end }}
+            ></div>
+            {{ if eq .Type "code" }}
+            <div class="out-block" hidden></div>
+            {{ end }}
+          </div>
+        </article>
+        {{ else }}
+        <div class="g-empty g-empty-cells" id="empty-notebook">
+          <p class="font-medium">Empty notebook</p>
+          <p class="text-sm text-base-content/55 mt-1 mb-4">Add a first cell to begin.</p>
+          <div class="flex flex-wrap gap-2 justify-center">
+            <button type="button" class="btn btn-primary btn-sm gap-1" id="btn-first-code">
+              <span aria-hidden="true">+</span> Code
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm gap-1" id="btn-first-md">
+              <span aria-hidden="true">+</span> Markdown
+            </button>
+          </div>
+        </div>
+        {{ end }}
+        {{ if .Cells }}
+        <div class="cell-insert cell-insert-end" data-insert-end role="group" aria-label="Add cell at end">
+          <button type="button" class="cell-insert-btn" data-type="code" title="Add code cell" aria-label="Add code cell">
+            <span aria-hidden="true">+</span><span class="cell-insert-label">Code</span>
+          </button>
+          <button type="button" class="cell-insert-btn" data-type="markdown" title="Add markdown cell" aria-label="Add markdown cell">
+            <span aria-hidden="true">+</span><span class="cell-insert-label">Markdown</span>
+          </button>
+        </div>
+        {{ end }}
+      </div>
+    </main>
+
+    <aside id="chat-panel" class="chat-panel" data-open="false" aria-label="Session chat" aria-hidden="true">
+      <div class="chat-panel-inner">
+        <div class="chat-panel-head">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold leading-tight">Chat</div>
+            <div class="text-xs text-base-content/50 leading-tight">Session only · not saved</div>
+          </div>
+          <button type="button" class="g-icon-btn" id="btn-chat-close" aria-label="Close chat" title="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="chat-panel-log" id="chat-log" aria-live="polite"></div>
+        <form class="chat-panel-form" id="chat-form">
           <input type="text" id="chat-input" placeholder="Message…" aria-label="Chat message" autocomplete="off"
-            class="input input-bordered input-xs w-full" />
-          <button class="btn btn-xs btn-primary w-full" type="submit">Send</button>
+            class="input input-bordered input-sm w-full" />
+          <button class="btn btn-primary btn-sm" type="submit">Send</button>
         </form>
       </div>
     </aside>
   </div>
 
-
-  <dialog id="kernel-dialog" class="modal">
-    <div class="modal-box max-w-md p-0 gap-0">
-      <div class="px-3 py-2 border-b border-base-300 flex items-center justify-between">
-        <div>
-          <h3 class="font-semibold text-sm">Select kernel</h3>
-          <p class="text-[0.625rem] text-base-content/50">Required before Run · not started until you run a cell</p>
+  <dialog id="kernel-dialog" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box p-0 gap-0 w-full sm:max-w-lg max-h-[85vh] flex flex-col rounded-t-box sm:rounded-box shadow-lg">
+      <div class="shrink-0 px-4 pt-4 pb-3 border-b border-base-300">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <h3 class="font-semibold text-base leading-tight">Kernel</h3>
+            <p class="text-xs text-base-content/55 mt-1 leading-snug">
+              Pick a runtime. It starts on first <span class="font-medium">play</span>, not on select.
+            </p>
+          </div>
+          <form method="dialog" class="shrink-0">
+            <button class="g-icon-btn" aria-label="Close">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </form>
         </div>
-        <form method="dialog"><button class="btn btn-ghost btn-xs btn-square" aria-label="Close">✕</button></form>
+        <label class="input input-bordered input-sm flex items-center gap-2 mt-3 h-9 min-h-0 bg-base-200">
+          <span class="text-base-content/40 text-xs" aria-hidden="true">⌕</span>
+          <input type="search" id="kernel-filter" class="grow bg-transparent border-0 outline-none text-sm" placeholder="Filter by name…" autocomplete="off" />
+        </label>
       </div>
-      <div id="kernel-list" class="max-h-80 overflow-y-auto p-2 text-xs">
-        <p class="text-base-content/50 px-1 py-2">Loading…</p>
+      <div id="kernel-list" class="flex-1 min-h-0 overflow-y-auto text-sm">
+        <div class="flex items-center justify-center gap-2 py-10 text-base-content/50 text-xs">
+          <span class="loading loading-spinner loading-xs"></span>
+          Loading kernels…
+        </div>
+      </div>
+      <div class="shrink-0 px-4 py-3 border-t border-base-300 flex items-center justify-between gap-2 bg-base-200/40">
+        <span class="text-xs text-base-content/50 truncate" id="kernel-dialog-hint">Jupyter specs and optional uv Pythons</span>
+        <form method="dialog"><button class="btn btn-sm btn-ghost">Cancel</button></form>
       </div>
     </div>
-    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    <form method="dialog" class="modal-backdrop bg-black/40"><button>close</button></form>
   </dialog>
 
   <script>

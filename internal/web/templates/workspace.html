@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="gaderno-light">
+<html lang="en" data-theme="gaderno-light" class="h-full">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,50 +18,87 @@
     })();
   </script>
 </head>
-<body class="min-h-screen bg-base-100 text-base-content text-sm">
-  <header class="navbar g-navbar sticky top-0 z-50 bg-base-200 border-b border-base-300 px-2 sm:px-3 gap-2">
-    <div class="navbar-start gap-1 min-w-0">
-      <a href="/" class="btn btn-ghost btn-xs font-bold tracking-tight normal-case">gaderno</a>
-      <span class="text-base-content/50 text-xs">workspace</span>
-    </div>
-    <div class="navbar-end gap-1">
-      <label class="swap swap-rotate btn btn-ghost btn-xs" title="Theme">
-        <input type="checkbox" class="theme-controller" value="gaderno-dark" id="theme-toggle" />
-        <span class="swap-off text-xs">☀</span>
-        <span class="swap-on text-xs">☾</span>
-      </label>
+<body class="min-h-full bg-base-100 text-base-content text-sm">
+  <header class="g-topbar sticky top-0 z-50 bg-base-100/90 backdrop-blur-sm border-b border-base-300">
+    <div class="g-topbar-inner">
+      <a href="/" class="g-logo" title="gaderno" aria-label="gaderno home">G</a>
+      <span class="g-topbar-title">Workspace</span>
+      <span class="flex-1"></span>
+      <details class="dropdown dropdown-end">
+        <summary class="g-icon-btn" aria-label="Menu" title="Menu">
+          <span class="g-avatar" id="ws-avatar" aria-hidden="true">·</span>
+        </summary>
+        <ul class="menu dropdown-content bg-base-100 rounded-box z-50 w-52 p-2 shadow-md border border-base-300 text-sm mt-1">
+          <li class="menu-title text-xs">Theme</li>
+          <li><button type="button" class="theme-set" data-theme="gaderno-light">Light</button></li>
+          <li><button type="button" class="theme-set" data-theme="gaderno-dark">Dark</button></li>
+          <li class="menu-title text-xs">About</li>
+          <li><span class="text-xs text-base-content/60 pointer-events-none">Local notebooks · server owns state</span></li>
+        </ul>
+      </details>
     </div>
   </header>
 
-  <main class="p-3 sm:p-4 max-w-3xl">
-    <h1 class="text-lg font-semibold tracking-tight mb-1">Notebooks</h1>
-    <p class="text-xs text-base-content/60 mb-3">Open a notebook or create one. Server owns state; kernels run on this host.</p>
+  <main class="g-workspace">
+    <header class="mb-6">
+      <h1 class="text-2xl font-semibold tracking-tight text-balance">Notebooks</h1>
+      <p class="text-sm text-base-content/60 mt-1 max-w-prose">
+        Open a notebook or create one. Kernels run on this host; the server holds the live document.
+      </p>
+    </header>
 
     {{ if .Notebooks }}
-    <div class="overflow-x-auto border border-base-300 rounded-field">
-      <table class="table table-xs">
-        <thead>
-          <tr><th class="text-xs uppercase tracking-wide text-base-content/50 font-semibold">Name</th></tr>
-        </thead>
-        <tbody>
-          {{ range .Notebooks }}
-          <tr class="hover:bg-base-200">
-            <td class="font-code text-xs"><a class="link link-primary" href="/n/{{ . }}">{{ . }}</a></td>
-          </tr>
-          {{ end }}
-        </tbody>
-      </table>
-    </div>
+    <ul class="g-nb-list" role="list">
+      {{ range .Notebooks }}
+      <li>
+        <a class="g-nb-row" href="/n/{{ . }}">
+          <span class="g-nb-icon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+              <path d="M8 7h8M8 11h6"/>
+            </svg>
+          </span>
+          <span class="g-nb-name font-code">{{ . }}</span>
+          <span class="g-nb-chevron text-base-content/35" aria-hidden="true">→</span>
+        </a>
+      </li>
+      {{ end }}
+    </ul>
     {{ else }}
-    <p class="text-xs text-base-content/50 py-3">No notebooks in this workspace yet.</p>
+    <div class="g-empty">
+      <p class="font-medium">No notebooks yet</p>
+      <p class="text-sm text-base-content/55 mt-1">Create one below — a blank code cell is waiting.</p>
+    </div>
     {{ end }}
 
-    <form class="flex flex-wrap gap-2 mt-3 items-center" method="post" action="/api/notebooks">
-      <input type="text" name="name" placeholder="name.ipynb" required aria-label="Notebook file name" autocomplete="off"
-        class="input input-bordered input-xs font-code flex-1 min-w-[10rem]" />
-      <button class="btn btn-primary btn-xs" type="submit">Create</button>
+    <form class="g-create mt-6" method="post" action="/api/notebooks">
+      <label class="sr-only" for="nb-name">Notebook file name</label>
+      <input id="nb-name" type="text" name="name" placeholder="name.ipynb" required
+        autocomplete="off" class="input input-bordered font-code flex-1 min-w-0" />
+      <button class="btn btn-primary gap-1.5 shrink-0" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Create
+      </button>
     </form>
   </main>
   <script src="/static/theme.js" defer></script>
+  <script>
+    (function () {
+      try {
+        var n = localStorage.getItem("gaderno-display-name") || "";
+        var el = document.getElementById("ws-avatar");
+        if (el) el.textContent = (n.trim()[0] || "?").toUpperCase();
+      } catch (e) {}
+      document.querySelectorAll(".theme-set").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var t = b.getAttribute("data-theme");
+          if (window.gadernoSetTheme) window.gadernoSetTheme(t);
+          var d = b.closest("details");
+          if (d) d.open = false;
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -94,7 +94,18 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | 16 | Spec lives in **`SPEC.md`** (not DESIGN.md). |
 | 17 | **Packaging:** GoReleaser for tagged releases — **binaries + checksums only** (no Homebrew tap, no Docker-first). Copy config from existing personal/project GoReleaser examples; do not invent a stub-from-scratch layout. |
 | 18 | **Kernel discovery:** implement Jupyter’s kernelspec search paths in Go (“copy Jupyter”); do not depend on shelling out to `jupyter kernelspec list`. |
-| 19 | **Markdown UX:** toggle — edit source in CM; on blur/exit show server-sanitized HTML preview. |
+| 19 | **Markdown UX:** **preview-first** — cell always shows preview; click enters edit (CodeMirror); blur/click-out returns to preview (server-sanitized HTML when available, plain text fallback). |
+| 38 | **Web UI personality:** spacier, polished, mobile-usable (edit+run is the bar). Quiet delight (motion, empty states, microcopy) — not mascots. Not dense JupyterLab chrome. |
+| 39 | **App chrome (one map mobile+desktop):** identity **G** mark on Go-gopher blue (`#00ADD8` family) → workspace; **session status** control (sync/trust); **chat** icon; **avatar** overflow menu. Icons-first; **icons only on mobile**. No permanent multi-text button bar. Desktop is the same chrome, wider. |
+| 40 | **Gopher blue is logo only** — not the full primary system color. Product primary remains the instrument/cobalt family unless retuned for polish. |
+| 41 | **Session status control:** shows connection/sync state (connecting / live-synced / offline / error; optional brief “saving…” when force-save). **Click opens kernel chooser** (pick/bind). Kernel is not a separate permanent topbar control. |
+| 42 | **Save is secondary:** server owns the document; disk flush is background. No primary Save CTA. Optional force-save lives in the avatar menu. |
+| 43 | **Chat presentation:** closable **panel** (full width on mobile). Not a small modal and not a separate route/tab. Session-only, RAM. |
+| 44 | **Avatar menu (no accounts):** local display name, theme, export, optional force-save, kernel deep-link, about/path. Avatar = local initials/color (awareness name). |
+| 45 | **Cell run affordance:** **play control in the cell gutter** (not a text “Run” button in a toolbar). Execution count shown **near play**. Running state morphs play (spinner / stop when interrupt exists). |
+| 46 | **Insert cells:** Colab-style **gaps between cells**; desktop hover emphasizes `+`; **always-subtle tappable gap** on touch → Code / Markdown. No permanent `+ Code / + Markdown` toolbar. |
+| 47 | **Workspace UI:** simple notebook list with icons, breathing room, same identity chrome. No folders/search in v1. |
+| 48 | **Per-cell chrome:** idle cells show content (+ play for code). Type switch, move, delete live in a cell overflow menu (and/or selection), not permanent Code/Markdown tabs on every row. |
 | 20 | **Large outputs (v1):** cap + truncate only; no blob store. Big/binary plumbing later. |
 | 21 | **Structure/authority:** anyone may propose any doc change; **server may reject** (drop/not relay, error to originator). |
 | 22 | **Keyboard UX (v1):** no custom hotkey scheme; at most basic focusable controls (tab order, buttons, native focus). |
@@ -111,6 +122,8 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | 33 | **`NeedsKernel` blocks exec only** — edit, chat, save, awareness still work. Multi-client: session-level chooser; first valid pick wins; all clients see the same bound name. |
 | 34 | **Switch kernel:** kill old process if any; clear exec queue; rebind; next Run spawns the new spec (lazy). |
 | 35 | **Persist kernelspec into ipynb only after successful spawn** (not on bind alone). |
+| 36 | **Session identity fence:** each live hub has a stable **`session_id`** (UUID minted at hub open). It is **not** the Jupyter ZMQ messaging session and does **not** change on kernel restart/rebind. It changes only when the hub is newly created (process start, hub eviction/reopen). |
+| 37 | **Client session check:** on WS connect the server sends **only** `hello { session_id, client_id }` first (no CRDT yet). The client asks: *“am I connecting to the same session I was in before?”* Remember last `session_id` per notebook path in **`sessionStorage`** (per-tab). Same id (or first visit) → client sends `hello.ack { session_id }`, **then** attaches Yjs and the server may apply sync / control from that peer. Different id → write the new id, close socket, **`location.reload()`** — **never** sync first. Server **rejects** binary CRDT and control from peers that have not acked hello (blocks a reconnecting tab from poisoning a recreated hub with an old Y.Doc). |
 
 ---
 
@@ -121,6 +134,7 @@ Prior art: Jupyter messaging protocol, Colab (server kernels + collab), Yjs/y-we
 | **Module** | Package with a small interface and substantial behavior (deep module). |
 | **Seam** | Boundary where adapters swap (`KernelConn`, `CRDTDoc`, `NotebookStore`). |
 | **Session** | Live binding: one notebook path + ygo doc + ≤1 kernel + connected clients. |
+| **Session id** | UUID for one hub lifetime. Clients compare on reconnect; mismatch ⇒ hard page reset. Distinct from kernel ZMQ `session` headers and from per-connection `client_id`. |
 | **Hub** | Per-notebook actor: serializes server-side mutations, owns kernel IOPub apply, fans out WS. |
 | **Server ack** | Update accepted into server ygo (and will be relayed). Powers “Synced” UI. |
 | **Disk flush** | Debounced write of `.ipynb`. Not what “Synced” means in v1. |
@@ -434,6 +448,8 @@ sequenceDiagram
 
 | Kind | Direction | Role |
 |------|-----------|------|
+| `hello` | s→c | **First** frame after connect: `{ session_id, client_id }`. No CRDT until ack. |
+| `hello.ack` | c→s | Client accepted this `session_id` (or first visit). Server marks peer Ready and starts sync. |
 | `yjs` / binary sync | both | Yjs update / sync step / awareness (y-protocols style) |
 | `exec.cmd` | c→s | run, interrupt, restart, enqueue range |
 | `exec.event` | s→c | optional high-level busy toasts (CRDT may already carry status) |
@@ -456,7 +472,13 @@ Prefer **binary WS frames** for Yjs updates; JSON text frames for exec/chat/cont
 #### Reconnect
 
 1. WS open → auth/token.
-2. Yjs state vector exchange; server sends missing updates (full resync from ipynb rebuild if session was cold).
+2. Server sends **only `hello`** (`session_id`, `client_id`). No sync step1, no status fan-in for CRDT yet. Client is **not Ready**.
+3. Client compares `session_id` to `sessionStorage` key for this notebook path:
+   - **missing stored id** (first attach in this tab) → store id; send **`hello.ack`**; attach Yjs transport.
+   - **same id** → same live session; send **`hello.ack`**; attach Yjs (may push unacked local text — same life).
+   - **different id** → store new id; close WS; **`location.reload()`**. Do **not** send ack or any CRDT frames.
+4. On **`hello.ack`**, server marks peer Ready, then sends kernel status + Yjs sync step1. Until Ready, server **drops** that peer’s binary sync and control (including awareness).
+5. Yjs state vector exchange proceeds only after the fence.
 3. Awareness rejoin.
 4. Chat history tail from RAM (empty if new session).
 5. Kernel status snapshot.
@@ -569,8 +591,10 @@ type NotebookStore interface {
 - SVG only via `<img>` or sanitized path; default CSP.
 - Prefer pushing output data through **CRDT** (kitchen sink) and letting clients render with shared rules **or** push `view.html` for markdown/preview — either is fine if **sanitization runs on server** before untrusted HTML is marked safe.
 - Stream coalesce: first chunk ASAP; later chunks ≤33ms coalesce; never block IOPub on WS.
-- **Markdown cells:** toggle UX — focused/edit mode uses CodeMirror on `Y.Text`; unfocused shows server-sanitized HTML preview (from current source). No always-on split pane in v1.
-- **Keyboard:** no gaderno hotkey layer in v1. Run/interrupt/add-cell are **buttons** (and other explicit controls). Rely on browser/CodeMirror defaults only where unavoidable; do not build a shortcut map or command palette. Controls should be focusable for basic accessibility.
+- **Markdown cells:** **preview-first** — unfocused shows server-sanitized HTML preview (plain-text fallback); click enters CodeMirror on `Y.Text`; blur/click-out returns to preview. No always-on split pane; no permanent Preview/Edit toggle chrome.
+- **Code cells:** play control in the gutter runs the cell; execution_count is shown near play when set.
+- **Keyboard:** no gaderno hotkey layer in v1. Run/interrupt/add-cell are **explicit controls** (play, gap `+`, menus). Rely on browser/CodeMirror defaults only where unavoidable; do not build a shortcut map or command palette. Controls should be focusable for basic accessibility.
+- **Layout chrome:** see decisions 38–48 (icon shell, session→kernel, chat panel, insert gaps).
 
 ### 10. Latency targets
 
@@ -584,8 +608,9 @@ type NotebookStore interface {
 
 ### 11. Presence & chat
 
-- **Awareness:** cursor, selection, name, color per client.
+- **Awareness:** cursor, selection, name, color per client. Local display name is editable from the avatar menu (persisted in `localStorage`; pushed into awareness).
 - **Chat:** notebook session memory ring buffer (e.g. last N messages); join sends tail; not in ipynb; wiped on session end/server restart.
+- **Chat UI:** closable panel (full-width on mobile); opened from the chat icon in the app chrome.
 - **No comments.**
 
 ---
@@ -858,7 +883,9 @@ flowchart LR
 
 ## Grill log (compressed)
 
-Product: live co-edit + CRDT + ygo. Server king / client follower. Kitchen-sink doc with server-only outputs. Optimistic text + Docs-like server-ack sync status. No accounts; token/reachability. Disk ipynb only; lose unacked if server dies. Stable cell ids. Awareness yes; comments no; session chat RAM on single WS. Speculate text only. Packaging: GoReleaser binaries+checksums only (no Homebrew; config from examples). Kernel discovery: copy Jupyter paths in Go. Markdown toggle. Outputs cap/truncate. Anyone proposes doc changes; server may reject.
+Product: live co-edit + CRDT + ygo. Server king / client follower. Kitchen-sink doc with server-only outputs. Optimistic text + Docs-like server-ack sync status. No accounts; token/reachability. Disk ipynb only; lose unacked if server dies. Stable cell ids. Awareness yes; comments no; session chat RAM on single WS. Speculate text only. Packaging: GoReleaser binaries+checksums only (no Homebrew; config from examples). Kernel discovery: copy Jupyter paths in Go. Markdown preview-first. Outputs cap/truncate. Anyone proposes doc changes; server may reject.
+
+**UI redesign grill (2026-07-17):** Spacier + polished + mobile edit/run. Quiet delight only. Shell: G (gopher-blue logo only) · session status (sync; click→kernel) · chat · avatar menu. Icons-only mobile; same chrome desktop. Save secondary (server-owned). Chat = closable panel. Cells: play+count in gutter; markdown click-to-edit; Colab-style always-subtle insert gaps. Workspace: simple list + icons.
 
 ---
 

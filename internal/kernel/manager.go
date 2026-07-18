@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,8 @@ type Manager struct {
 	connPath string
 	tmpDir   string
 	cancel   context.CancelFunc
+	// shellMu serializes shell request/response cycles (execute vs complete).
+	shellMu sync.Mutex
 }
 
 // Start discovers the kernelspec, writes connection file, starts the process,

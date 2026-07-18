@@ -1,26 +1,31 @@
 # gaderno web UI
 
 ## Intent
-Notebook product surface with **daisyUI 5 + Tailwind 4**, Jupyter-legible cells, and dense tool chrome (tight sticky topbar, compact controls, full-bleed content).
+Notebook product surface with **daisyUI 5 + Tailwind 4**: spacier, polished, mobile-usable. Icon app chrome, play-in-gutter cells, preview-first markdown, closable chat panel.
 
 ## Stack
 - Source: `styles/input.css` (`@plugin "daisyui"`, custom themes)
 - Build: `bun run build:css` → `internal/web/static/app.css` (embedded)
-- Themes: `gaderno-light` (default) / `gaderno-dark` (`prefersdark` + toggle)
-- Components: navbar, btn, badge, table, input, swap (theme), link
+- Themes: `gaderno-light` (default) / `gaderno-dark` (`prefersdark` + avatar menu)
+- Components: navbar, btn, badge, menu, modal, input, dropdown
 
 ## Color
-Cobalt primary (~250° OKLCH). Pure white base in light. Dense radii (`0.25rem`), `--depth: 0`.
+Cobalt primary (~250° OKLCH). Pure white base in light. **Logo chip only:** Go gopher blue `#00ADD8` behind white **G**. Radii ~0.375–0.5rem for a slightly softer product feel; avoid 24px+ cards.
 
-## Density
-- Navbar `h-10` / `g-navbar` override daisy min-height
-- `btn-xs`, `input-xs`, `table-xs`, `badge-xs`
-- Cell grid with In/Out prompts; hairline borders not large cards
+## Shell
+- Sticky topbar: **G** | path | flex | session status | chat | avatar
+- Mobile: icon-only actions; path truncates
+- Session status: sync/trust; opens kernel dialog
+- Chat: full-width closable panel (mobile); same panel model desktop
+- Avatar menu: name, theme, export, force-save, kernel, about
 
-## Editor
-- **CodeMirror 6** (`web/editor/main.js` → `bun run build:js` → `static/editor.js`)
-- Python + markdown languages; min height ~8.5rem for code
-- Debounced `cell.set_source` over WS; Run flushes source then `exec.run`
+## Cells
+- Grid: gutter (play + count) | body
+- No permanent Run text / Code|Markdown tabs per row
+- Cell menu for type / move / delete
+- Insert: subtle inter-cell gap with `+` (always tappable; hover emphasis on pointer devices)
+- CodeMirror: min-height tracks content more tightly than the old 8.5rem wells
+- Markdown: preview default; click to edit; exit restores preview
 
 ## Motion
-Minimal; theme toggle only.
+Quiet delight only: panel open/close, play running state, gap hover. Respect `prefers-reduced-motion`.

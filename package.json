@@ -15,5 +15,11 @@
     "codemirror": "^6.0.1",
     "daisyui": "^5.6.16",
     "tailwindcss": "^4.1.11"
+  },
+  "dependencies": {
+    "lib0": "^0.2.117",
+    "y-codemirror.next": "^0.3.5",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.31"
   }
 }
