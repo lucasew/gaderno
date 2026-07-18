@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -33,7 +32,7 @@ func StartProcess(spec Spec, connectionFile, cwd string) (*exec.Cmd, error) {
 	for k, v := range spec.Spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	cmd.WaitDelay = 2 * time.Second
@@ -41,16 +40,4 @@ func StartProcess(spec Spec, connectionFile, cwd string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	return cmd, nil
-}
-
-// killProcessGroup sends sig to the process group.
-func killProcessGroup(cmd *exec.Cmd, sig os.Signal) error {
-	if cmd == nil || cmd.Process == nil {
-		return nil
-	}
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil {
-		return cmd.Process.Signal(sig)
-	}
-	return syscall.Kill(-pgid, sig.(syscall.Signal))
 }

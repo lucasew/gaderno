@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+#
+# Binary-only (SPEC): archives + checksums. No Homebrew / Docker / nfpm.
+# Layout matches contapila / orvalho / mclone.
+
+version: 2
+project_name: gaderno
+
+before:
+  hooks:
+    - go mod tidy
+    - mise run ci
+
+builds:
+  - id: gaderno
+    binary: gaderno
+    main: ./cmd/gaderno
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/lucasew/gaderno/internal/cli.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    # OS/Arch names compatible with uname-style results (same as contapila/orvalho).
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+release:
+  footer: >-
+
+    ---
+
+    **Install**
+
+    Download the archive for your OS/arch, extract `gaderno`, put it on `PATH`.
+
+    ```text
+    gaderno version
+    gaderno serve --root ./notebooks --listen :8765
+    ```
+
+    Kernels are **not** bundled: use a Jupyter kernelspec and/or `uv` on `PATH`.
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).

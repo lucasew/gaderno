@@ -16,3 +16,11 @@ run = "go fmt ./..."
 [tasks.ci]
 depends = ["codegen"]
 run = "go test ./... && go build -o /dev/null ./cmd/gaderno/"
+
+[tasks.release-snapshot]
+description = "Local GoReleaser snapshot (linux/darwin/windows × amd64/arm64, no publish)"
+run = "goreleaser release --snapshot --clean --skip=publish"
+
+[tasks.release-check]
+description = "Validate .goreleaser.yaml"
+run = "goreleaser check"
