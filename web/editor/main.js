@@ -123,6 +123,7 @@ export function createCollabSession() {
           EditorView.theme({
             "&": {
               fontSize: "0.8125rem",
+              height: "100%",
               minHeight: minH + "px",
               backgroundColor: "var(--color-base-100)",
               color: "var(--color-base-content)",
@@ -131,7 +132,7 @@ export function createCollabSession() {
               fontFamily:
                 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
               lineHeight: "1.45",
-              minHeight: minH + "px",
+              minHeight: "100%",
             },
             ".cm-content": {
               minHeight: minH - 12 + "px",
@@ -139,6 +140,7 @@ export function createCollabSession() {
               caretColor: "var(--color-primary)",
             },
             ".cm-gutters": {
+              minHeight: minH + "px",
               backgroundColor: "var(--color-base-200)",
               color: "color-mix(in oklch, var(--color-base-content) 45%, transparent)",
               borderRight: "1px solid var(--color-base-300)",
