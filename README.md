@@ -130,12 +130,20 @@ styles/ web/          # Tailwind/daisyUI + editor sources
 
 Tags have **no `v` prefix** (see [`.svu.yml`](.svu.yml)).
 
+Local (needs `GITHUB_TOKEN` with release rights if publishing):
+
 ```bash
 mise run release          # next (svu) + goreleaser
 mise run release patch    # major | minor | patch | next
 ```
 
-Publishes platform archives + checksums only ([`.goreleaser.yaml`](.goreleaser.yaml)). CI: tag push → [`.github/workflows/release.yml`](.github/workflows/release.yml).
+CI ([`.github/workflows/autorelease.yml`](.github/workflows/autorelease.yml)):
+
+- **push / PR / Saturday schedule** — install, codegen, format, `mise run ci`
+- **workflow_dispatch** with patch/minor/major — `mise release <bump>` (tag + GoReleaser)
+- Updater-bot PR gate (same pattern as contapila / orvalho)
+
+Publishes platform archives + checksums only ([`.goreleaser.yaml`](.goreleaser.yaml)).
 
 ## Security notes
 
