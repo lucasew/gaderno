@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lucasew/gaderno/internal/document"
@@ -18,21 +21,15 @@ var notebookPage = loadTemplate("notebook.html")
 func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Registry, defaultKernel string, logger *slog.Logger) {
 	mux.HandleFunc("GET /n/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		path := r.PathValue("path")
-		var nb *document.Notebook
-		if hub, err := reg.GetOrOpen(r.Context(), path); err == nil {
-			nb = hub.Doc.ProjectNotebook()
-		} else {
-			var err2 error
-			nb, err2 = st.Load(r.Context(), path)
-			if err2 != nil {
-				if store.IsNotExist(err2) {
-					http.NotFound(w, r)
-					return
-				}
-				logger.Error("load notebook", "path", path, "err", err2)
-				http.Error(w, "load failed", http.StatusInternalServerError)
+		nb, err := loadCurrentNotebook(r.Context(), st, reg, path)
+		if err != nil {
+			if store.IsNotExist(err) {
+				http.NotFound(w, r)
 				return
 			}
+			logger.Error("load notebook", "path", path, "err", err)
+			http.Error(w, "load failed", http.StatusInternalServerError)
+			return
 		}
 		type cellView struct {
 			Type       string
@@ -114,9 +111,12 @@ func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Re
 		_ = json.NewEncoder(w).Encode(res)
 	})
 
+	// JSON or download of the *current* notebook: live CRDT projection when a
+	// hub is open (or can be opened), matching the page SSR path. Disk alone
+	// lags debounced saves and drops in-flight edits from Export.
 	mux.HandleFunc("GET /api/notebooks/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		path := r.PathValue("path")
-		nb, err := st.Load(r.Context(), path)
+		nb, err := loadCurrentNotebook(r.Context(), st, reg, path)
 		if err != nil {
 			if store.IsNotExist(err) {
 				http.NotFound(w, r)
@@ -132,11 +132,46 @@ func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Re
 				return
 			}
 			w.Header().Set("Content-Type", "application/x-ipynb+json")
-			w.Header().Set("Content-Disposition", `attachment; filename="notebook.ipynb"`)
+			w.Header().Set("Content-Disposition", attachmentDisposition(path))
 			_, _ = w.Write(raw)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(nb)
 	})
+}
+
+// loadCurrentNotebook returns the live CRDT projection when the hub can be
+// opened, otherwise the on-disk snapshot (same policy as notebook SSR).
+func loadCurrentNotebook(ctx context.Context, st *store.Store, reg *session.Registry, path string) (*document.Notebook, error) {
+	if hub, err := reg.GetOrOpen(ctx, path); err == nil {
+		return hub.Doc.ProjectNotebook(), nil
+	} else if !store.IsNotExist(err) {
+		// Hub open failed for a reason other than missing file — still try disk.
+		if nb, loadErr := st.Load(ctx, path); loadErr == nil {
+			return nb, nil
+		}
+		return nil, err
+	}
+	return st.Load(ctx, path)
+}
+
+// attachmentDisposition builds a Content-Disposition header using the notebook
+// basename so Export downloads keep the real name (not a generic notebook.ipynb).
+func attachmentDisposition(path string) string {
+	return fmt.Sprintf(`attachment; filename="%s"`, attachmentFilename(path))
+}
+
+func attachmentFilename(path string) string {
+	name := filepath.Base(strings.TrimSpace(path))
+	name = strings.ReplaceAll(name, `"`, "")
+	name = strings.ReplaceAll(name, "\r", "")
+	name = strings.ReplaceAll(name, "\n", "")
+	if name == "" || name == "." || name == ".." {
+		return "notebook.ipynb"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".ipynb") {
+		name += ".ipynb"
+	}
+	return name
 }
