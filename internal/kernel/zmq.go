@@ -142,6 +142,11 @@ func (c *Conn) SendShell(msg Message) error {
 	return c.send(c.shell, msg)
 }
 
+// SendControl sends a signed message on the control channel (interrupt, shutdown).
+func (c *Conn) SendControl(msg Message) error {
+	return c.send(c.control, msg)
+}
+
 // RecvShell receives one shell message (from reader loop).
 func (c *Conn) RecvShell(ctx context.Context) (Message, error) {
 	select {

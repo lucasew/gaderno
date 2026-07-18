@@ -88,23 +88,60 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 	// Stateful VT filters so progress spinners / CR rewrites collapse across chunks.
 	var outTerm, errTerm TermFilter
 
+	// When the caller's context cancels or we hit the execute deadline, send
+	// interrupt_request on the control channel and drain until this execute
+	// goes idle (or a short grace period). Leaving the kernel running after a
+	// timeout holds shellMu free for the next Complete/Execute while the old
+	// code still owns the kernel — interleaved shell replies and wasted CPU.
+	const interruptGrace = 5 * time.Second
+	var stopCause error
+	interrupted := false
+
 	for {
-		if err := ctx.Err(); err != nil {
-			return res, err
+		if stopCause == nil {
+			if err := ctx.Err(); err != nil {
+				stopCause = err
+			} else if time.Now().After(deadline) {
+				stopCause = fmt.Errorf("execute timeout")
+			}
 		}
+		if stopCause != nil && !interrupted {
+			_ = m.Interrupt(context.Background())
+			interrupted = true
+			deadline = time.Now().Add(interruptGrace)
+		}
+		if stopCause != nil && interrupted && time.Now().After(deadline) {
+			if res.Status == "" {
+				res.Status = "abort"
+			}
+			res.Stdout = outTerm.String()
+			res.Stderr = errTerm.String()
+			return res, stopCause
+		}
+
 		remain := time.Until(deadline)
 		if remain <= 0 {
-			return res, fmt.Errorf("execute timeout")
+			continue
 		}
-		rctx, cancel := context.WithTimeout(ctx, remain)
+		// After cancel, parent ctx is done — drain with Background so we can
+		// still observe idle / execute_reply from the interrupted run.
+		parentCtx := ctx
+		if stopCause != nil {
+			parentCtx = context.Background()
+		}
+		rctx, cancel := context.WithTimeout(parentCtx, remain)
 		msg, ch, err := m.Conn.recvEither(rctx)
 		cancel()
 		if err != nil {
+			if stopCause != nil {
+				continue
+			}
 			if ctx.Err() != nil {
-				return res, ctx.Err()
+				// loop will set stopCause and interrupt on next iteration
+				continue
 			}
 			if time.Now().After(deadline) {
-				return res, fmt.Errorf("execute timeout")
+				continue
 			}
 			continue
 		}
@@ -121,6 +158,10 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 				if res.Status == "error" {
 					res.Ename, _ = msg.Content["ename"].(string)
 					res.Evalue, _ = msg.Content["evalue"].(string)
+				}
+				// Interrupted kernels often reply with status "abort" / "error".
+				if stopCause != nil && res.Status == "" {
+					res.Status = "abort"
 				}
 			}
 		case "iopub":
@@ -160,11 +201,17 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 				if state == "idle" && (parent == msgID || parent == "") {
 					// Only finish when this execute is idle; empty parent is rare
 					if parent == msgID {
+						res.Stdout = outTerm.String()
+						res.Stderr = errTerm.String()
+						if stopCause != nil {
+							if res.Status == "" {
+								res.Status = "abort"
+							}
+							return res, stopCause
+						}
 						if res.Status == "" {
 							res.Status = "ok"
 						}
-						res.Stdout = outTerm.String()
-						res.Stderr = errTerm.String()
 						return res, nil
 					}
 				}

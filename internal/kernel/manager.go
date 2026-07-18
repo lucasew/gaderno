@@ -123,6 +123,23 @@ func Start(ctx context.Context, kernelName, workDir string) (*Manager, error) {
 	return m, nil
 }
 
+// Interrupt asks the kernel to stop the current execution via control-channel
+// interrupt_request (Jupyter protocol). Best-effort: returns nil after the
+// message is sent; does not wait for the kernel to become idle.
+func (m *Manager) Interrupt(ctx context.Context) error {
+	if m.Conn == nil {
+		return fmt.Errorf("no connection")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	req := Message{
+		Header:  NewHeader(m.Session, "interrupt_request"),
+		Content: map[string]any{},
+	}
+	return m.Conn.SendControl(req)
+}
+
 // Shutdown interrupts and kills the kernel, closes sockets.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.Conn != nil {
