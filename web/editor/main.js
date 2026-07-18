@@ -103,6 +103,14 @@ export function createCollabSession() {
     editors.clear();
   }
 
+  function syncGutterWidth(host, view) {
+    if (!host || !view) return;
+    const g = view.dom.querySelector(".cm-gutters");
+    if (!g) return;
+    const w = Math.ceil(g.getBoundingClientRect().width);
+    if (w > 0) host.style.setProperty("--cm-gutter-w", w + "px");
+  }
+
   function createEditor(host, cellId, lang) {
     const ytext = ydoc.getText(sourceKey(cellId));
     const langExt = lang === "markdown" ? markdown() : python();
@@ -111,7 +119,7 @@ export function createCollabSession() {
     // or remounts look empty even though the CRDT still has content.
     const seed = ytext.toString();
     host.replaceChildren();
-    return new EditorView({
+    const view = new EditorView({
       parent: host,
       state: EditorState.create({
         doc: seed,
@@ -125,7 +133,7 @@ export function createCollabSession() {
               fontSize: "0.8125rem",
               height: "100%",
               minHeight: minH + "px",
-              backgroundColor: "var(--color-base-100)",
+              backgroundColor: "transparent",
               color: "var(--color-base-content)",
             },
             ".cm-scroller": {
@@ -133,6 +141,7 @@ export function createCollabSession() {
                 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
               lineHeight: "1.45",
               minHeight: "100%",
+              backgroundColor: "transparent",
             },
             ".cm-content": {
               minHeight: minH - 12 + "px",
@@ -140,14 +149,13 @@ export function createCollabSession() {
               caretColor: "var(--color-primary)",
             },
             ".cm-gutters": {
-              minHeight: minH + "px",
-              backgroundColor: "var(--color-base-200)",
+              backgroundColor: "transparent",
               color: "color-mix(in oklch, var(--color-base-content) 45%, transparent)",
-              borderRight: "1px solid var(--color-base-300)",
+              borderRight: "none",
             },
             ".cm-activeLineGutter": {
               backgroundColor:
-                "color-mix(in oklch, var(--color-primary) 10%, var(--color-base-200))",
+                "color-mix(in oklch, var(--color-primary) 10%, transparent)",
             },
             ".cm-activeLine": {
               backgroundColor:
@@ -157,9 +165,18 @@ export function createCollabSession() {
               outline: "none",
             },
           }),
+          // Keep host gutter strip width in sync when line numbers grow (9→10…).
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged || update.geometryChanged || update.viewportChanged) {
+              syncGutterWidth(host, update.view);
+            }
+          }),
         ],
       }),
     });
+    // After first layout paint
+    requestAnimationFrame(() => syncGutterWidth(host, view));
+    return view;
   }
 
   // Mount or refresh editors under root. Reuses views whose host DOM is still
