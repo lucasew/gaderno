@@ -55,12 +55,16 @@ gaderno serve --root ./notebooks --listen 127.0.0.1:8765
 
 Open **http://127.0.0.1:8765/** → create or open a notebook → pick a kernel (session status control) → **play** a cell.
 
-Optional shared token (anyone who can reach the process + token has full R/W/X):
+Optional shared token (anyone who can reach the process + token has full R/W/X).
+When set, HTTP and WebSocket require the token (`Authorization: Bearer`, cookie after `?token=…` bootstrap, or a one-shot `POST /api/ws-ticket`).
 
 ```bash
 export GADERNO_TOKEN=secret
 gaderno serve --root ./notebooks --listen 127.0.0.1:8765 --token "$GADERNO_TOKEN"
+# open http://127.0.0.1:8765/?token=secret  (cookie set; token stripped from URL)
 ```
+
+Non-loopback bind without a token is refused unless you pass `--i-understand` (open RCE as the server OS user).
 
 ### CLI
 
@@ -77,7 +81,8 @@ Flags override env. Prefix `GADERNO_`.
 |------|-----|---------|---------|
 | `--root` | `GADERNO_ROOT` | `.` | Workspace directory of `.ipynb` files |
 | `--listen` | `GADERNO_LISTEN` | `127.0.0.1:8080` | Listen address |
-| `--token` | `GADERNO_TOKEN` | _(empty)_ | Optional shared access token |
+| `--token` | `GADERNO_TOKEN` | _(empty)_ | Optional shared access token (enforced when set) |
+| `--i-understand` | `GADERNO_I_UNDERSTAND` | `false` | Allow non-loopback listen without a token |
 | `--kernel` | `GADERNO_KERNEL` | `python3` | Default kernelspec name hint (no auto-start) |
 
 ## Using the UI

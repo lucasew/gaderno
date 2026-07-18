@@ -8,6 +8,8 @@ type Config struct {
 	Listen string
 	Token  string
 	Kernel string // default kernelspec name when notebook metadata lacks one
+	// IUnderstand allows non-loopback listen without a shared token (explicit opt-in).
+	IUnderstand bool
 }
 
 // Default returns localhost-first defaults.

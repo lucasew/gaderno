@@ -142,13 +142,31 @@ import { createCollabSession } from "./editor.js";
   const sessionStorageKey = "gaderno.session:" + path;
   let sessionReady = false;
 
-  function connect() {
+  async function connect() {
     if (!path) return;
     sessionReady = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const sock = new WebSocket(
-      proto + "://" + location.host + "/ws/notebooks/" + path
-    );
+    let url = proto + "://" + location.host + "/ws/notebooks/" + path;
+    // SPEC: short-lived ticket when shared token is set (browsers cannot set Authorization on WS).
+    // Cookie auth also works; ticket is preferred and one-shot.
+    try {
+      const tr = await fetch("/api/ws-ticket", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (tr.ok) {
+        const tj = await tr.json();
+        if (tj && tj.ticket) {
+          url += (url.indexOf("?") >= 0 ? "&" : "?") + "ticket=" + encodeURIComponent(tj.ticket);
+        }
+      } else if (tr.status === 401) {
+        setStatus("Auth required", "err");
+        return;
+      }
+    } catch (_) {
+      /* open without ticket when endpoint unreachable */
+    }
+    const sock = new WebSocket(url);
     ws = sock;
     sock.binaryType = "arraybuffer";
     sock.onopen = function () {
