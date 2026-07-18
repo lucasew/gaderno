@@ -118,6 +118,10 @@ func parseInspectReply(content map[string]any, detailLevel int) InspectResult {
 			res.Text = multilineContent(th)
 		}
 	}
+	// ipykernel often wraps Signature/Docstring labels in ANSI colors.
+	if res.Text != "" {
+		res.Text = FilterTerminal(res.Text)
+	}
 	if res.Text != "" {
 		// Some kernels omit found=true but still send a body.
 		res.Found = true
