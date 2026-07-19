@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lucasew/gaderno/internal/document"
@@ -111,5 +112,82 @@ func TestCreateNewExists(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "x.ipynb")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSaveLoadWithFlock(t *testing.T) {
+	dir := t.TempDir()
+	st := New(dir)
+	nb := document.NewEmpty()
+	nb.Cells[0].Source = document.NewMultiline("under-lock")
+	if err := st.Save(nil, "locked.ipynb", nb); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Load(nil, "locked.ipynb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cells[0].SourceString() != "under-lock" {
+		t.Fatalf("got %q", got.Cells[0].SourceString())
+	}
+}
+
+func TestCreateNewOExcl(t *testing.T) {
+	dir := t.TempDir()
+	st := New(dir)
+	nb := document.NewEmpty()
+	if err := st.CreateNew(nil, "only.ipynb", nb); err != nil {
+		t.Fatal(err)
+	}
+	// Concurrent-style second claim must fail even without a racy Stat window.
+	err := st.CreateNew(nil, "only.ipynb", nb)
+	if !os.IsExist(err) {
+		t.Fatalf("want exist, got %v", err)
+	}
+}
+
+func TestConcurrentSavesSerialize(t *testing.T) {
+	dir := t.TempDir()
+	st := New(dir)
+	// Seed file so both writers flock an existing path.
+	nb0 := document.NewEmpty()
+	nb0.Cells[0].Source = document.NewMultiline("seed")
+	if err := st.Save(nil, "race.ipynb", nb0); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 8
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			nb := document.NewEmpty()
+			nb.Cells[0].Source = document.NewMultiline(strings.Repeat("x", i+1))
+			errCh <- st.Save(nil, "race.ipynb", nb)
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+	}
+	got, err := st.Load(nil, "race.ipynb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := got.Cells[0].SourceString()
+	if src == "" {
+		t.Fatal("empty source after concurrent saves")
+	}
+	// Final content must be one of the writers (not torn/mixed).
+	ok := false
+	for i := 0; i < n; i++ {
+		if src == strings.Repeat("x", i+1) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		t.Fatalf("unexpected source %q", src)
 	}
 }

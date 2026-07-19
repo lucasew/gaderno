@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,20 +47,32 @@ func CleanRel(rel string) (string, error) {
 }
 
 // Load reads and parses a notebook at relative path.
+// Takes a shared advisory flock while reading (best-effort on unsupported FS).
 func (s *Store) Load(_ context.Context, rel string) (*document.Notebook, error) {
 	abs, err := s.resolve(rel)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(abs)
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if err := tryFlock(f, false); err != nil {
+		return nil, err
+	}
+	defer tryFunlock(f)
+
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err
 	}
 	return document.Decode(raw)
 }
 
-// Save writes notebook atomically. If the file already exists and createOnly
-// semantics are needed, callers should check first. Save overwrites.
+// Save writes notebook atomically (temp + rename) under an exclusive advisory
+// flock (SPEC: store flock best-effort). If the file does not exist yet, the
+// lock is taken on a short-lived create before rename.
 func (s *Store) Save(_ context.Context, rel string, nb *document.Notebook) error {
 	abs, err := s.resolve(rel)
 	if err != nil {
@@ -79,7 +92,11 @@ func (s *Store) Save(_ context.Context, rel string, nb *document.Notebook) error
 		return err
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName)
+		}
+	}()
 
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
@@ -92,10 +109,29 @@ func (s *Store) Save(_ context.Context, rel string, nb *document.Notebook) error
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, abs)
+
+	// Exclusive lock on the destination path for the rename window so concurrent
+	// Save/Load pair with external tools that also flock the ipynb.
+	lockf, err := os.OpenFile(abs, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer lockf.Close()
+	if err := tryFlock(lockf, true); err != nil {
+		return err
+	}
+	defer tryFunlock(lockf)
+
+	if err := os.Rename(tmpName, abs); err != nil {
+		return err
+	}
+	tmpName = "" // rename took ownership; skip deferred Remove
+	return nil
 }
 
 // CreateNew saves only if the path does not exist.
+// Uses O_EXCL to claim the path atomically before writing content (avoids
+// two concurrent creates both passing a Stat check).
 func (s *Store) CreateNew(ctx context.Context, rel string, nb *document.Notebook) error {
 	rel, err := CleanRel(rel)
 	if err != nil {
@@ -105,12 +141,27 @@ func (s *Store) CreateNew(ctx context.Context, rel string, nb *document.Notebook
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(abs); err == nil {
-		return os.ErrExist
-	} else if !os.IsNotExist(err) {
+	dir := filepath.Dir(abs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return s.Save(ctx, rel, nb)
+	// Atomic claim: empty exclusive create, then Save fills content under flock.
+	f, err := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return os.ErrExist
+		}
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := s.Save(ctx, rel, nb); err != nil {
+		// Drop the empty claim so a retry can succeed.
+		_ = os.Remove(abs)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) resolve(rel string) (string, error) {
