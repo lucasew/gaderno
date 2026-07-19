@@ -16,6 +16,9 @@ type ExecuteResult struct {
 	Stderr         string `json:"stderr"`
 	Ename          string `json:"ename"`
 	Evalue         string `json:"evalue"`
+	// Traceback is the Jupyter error traceback (ANSI stripped), when present.
+	// Used for nbformat error outputs and live UI; may be empty on abort/timeout.
+	Traceback []string `json:"traceback,omitempty"`
 }
 
 // StreamChunk is a stdout/stderr update during execute.
@@ -156,8 +159,7 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 					res.ExecutionCount = n
 				}
 				if res.Status == "error" {
-					res.Ename, _ = msg.Content["ename"].(string)
-					res.Evalue, _ = msg.Content["evalue"].(string)
+					applyErrorContent(&res, msg.Content)
 				}
 				// Interrupted kernels often reply with status "abort" / "error".
 				if stopCause != nil && res.Status == "" {
@@ -190,11 +192,8 @@ func (m *Manager) ExecuteOpts(ctx context.Context, code string, opts ExecuteOpts
 					}
 				}
 			case "error":
-				res.Ename, _ = msg.Content["ename"].(string)
-				res.Evalue, _ = msg.Content["evalue"].(string)
-				// Tracebacks are often ANSI-colored.
-				res.Ename = FilterTerminal(res.Ename)
-				res.Evalue = FilterTerminal(res.Evalue)
+				// IOPub error carries ename/evalue/traceback (often ANSI-colored).
+				applyErrorContent(&res, msg.Content)
 				res.Status = "error"
 			case "status":
 				state, _ := msg.Content["execution_state"].(string)
@@ -288,6 +287,68 @@ func multilineContent(v any) string {
 		}
 		return fmt.Sprint(v)
 	}
+}
+
+// applyErrorContent copies ename/evalue/traceback from a Jupyter error or
+// execute_reply payload into res. Traceback lines are terminal-filtered so
+// saved ipynb and live UI do not keep raw ANSI CSI sequences.
+func applyErrorContent(res *ExecuteResult, content map[string]any) {
+	if res == nil || content == nil {
+		return
+	}
+	if ename, ok := content["ename"].(string); ok && ename != "" {
+		res.Ename = FilterTerminal(ename)
+	}
+	if evalue, ok := content["evalue"].(string); ok {
+		// evalue may be empty string for some exceptions; still prefer explicit.
+		res.Evalue = FilterTerminal(evalue)
+	}
+	if tb := tracebackFromContent(content); len(tb) > 0 {
+		res.Traceback = tb
+	}
+}
+
+// tracebackFromContent extracts and cleans Jupyter traceback frames.
+func tracebackFromContent(content map[string]any) []string {
+	if content == nil {
+		return nil
+	}
+	raw, ok := content["traceback"]
+	if !ok || raw == nil {
+		return nil
+	}
+	var lines []string
+	switch t := raw.(type) {
+	case []string:
+		lines = append(lines, t...)
+	case []any:
+		for _, x := range t {
+			switch v := x.(type) {
+			case string:
+				lines = append(lines, v)
+			default:
+				s := strings.TrimSpace(fmt.Sprint(v))
+				if s != "" {
+					lines = append(lines, s)
+				}
+			}
+		}
+	case string:
+		if t != "" {
+			lines = append(lines, t)
+		}
+	default:
+		return nil
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// Keep empty lines (traceback formatting); strip terminal junk only.
+		out = append(out, FilterTerminal(line))
+	}
+	return out
 }
 
 // normalizeMimeBundle flattens Jupyter mime values (string | []string) and

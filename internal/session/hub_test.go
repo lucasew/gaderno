@@ -165,6 +165,32 @@ func TestExecuteCellRecordsOutputsInCRDT(t *testing.T) {
 	}
 }
 
+func TestOutputsFromExecuteIncludesTraceback(t *testing.T) {
+	res := kernel.ExecuteResult{
+		Status:    "error",
+		Ename:     "ValueError",
+		Evalue:    "boom",
+		Traceback: []string{"Traceback (most recent call last):", "ValueError: boom"},
+	}
+	outs := outputsFromExecute(res, nil)
+	var errOut *document.Output
+	for i := range outs {
+		if outs[i].OutputType == "error" {
+			errOut = &outs[i]
+			break
+		}
+	}
+	if errOut == nil {
+		t.Fatalf("no error output: %#v", outs)
+	}
+	if errOut.Ename != "ValueError" || errOut.Evalue != "boom" {
+		t.Fatalf("%#v", errOut)
+	}
+	if len(errOut.Traceback) != 2 || errOut.Traceback[1] != "ValueError: boom" {
+		t.Fatalf("traceback %#v", errOut.Traceback)
+	}
+}
+
 func TestClientNotReadyBlocksSync(t *testing.T) {
 	dir := t.TempDir()
 	st := store.New(dir)

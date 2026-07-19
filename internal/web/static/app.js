@@ -269,10 +269,15 @@ import { createCollabSession } from "./editor.js";
         }
         renderStreams(cell, false);
         if (msg.status === "error") {
-          setErrorLine(
-            cell,
-            (msg.ename || "Error") + ": " + (msg.evalue || "")
-          );
+          // Prefer full traceback (ANSI already stripped server-side); fall
+          // back to ename:evalue when the kernel omitted frames.
+          let errText = "";
+          if (Array.isArray(msg.traceback) && msg.traceback.length) {
+            errText = msg.traceback.join("\n");
+          } else {
+            errText = (msg.ename || "Error") + ": " + (msg.evalue || "");
+          }
+          setErrorLine(cell, errText);
         } else {
           clearErrorLine(cell);
         }

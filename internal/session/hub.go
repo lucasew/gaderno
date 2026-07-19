@@ -509,12 +509,15 @@ func outputsFromExecute(res kernel.ExecuteResult, displays []kernel.DisplayData)
 		outs = append(outs, o)
 	}
 	if res.Status == "error" || res.Ename != "" {
+		tb := res.Traceback
+		if tb == nil {
+			tb = []string{}
+		}
 		outs = append(outs, document.Output{
 			OutputType: "error",
 			Ename:      res.Ename,
 			Evalue:     res.Evalue,
-			// Traceback not collected on the simplified ExecuteResult path yet.
-			Traceback: []string{},
+			Traceback:  tb,
 		})
 	}
 	if outs == nil {

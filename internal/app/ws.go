@@ -284,6 +284,7 @@ func handleControl(hub *session.Hub, client *session.Client, clientID string, ct
 				"stderr":          res.Stderr,
 				"ename":           res.Ename,
 				"evalue":          res.Evalue,
+				"traceback":       res.Traceback,
 				"execution_count": res.ExecutionCount,
 			})
 			hub.BroadcastJSON(b, "")
