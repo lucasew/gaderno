@@ -24,6 +24,10 @@ type Manager struct {
 	connPath string
 	tmpDir   string
 	cancel   context.CancelFunc
+	// waitCh receives the result of the single cmd.Wait() started at spawn.
+	// Shutdown drains it instead of calling Wait again (double-Wait panics /
+	// races after reaping).
+	waitCh chan error
 	// shellMu serializes shell request/response cycles (execute vs complete).
 	shellMu sync.Mutex
 }
@@ -56,8 +60,54 @@ func Start(ctx context.Context, kernelName, workDir string) (*Manager, error) {
 		return nil, err
 	}
 
+	// One Wait ownership for the process lifetime. ProcessState is only set
+	// after Wait, so the old "if ProcessState != nil && Exited()" check never
+	// fired and a crashing kernelspec spun the dial loop for up to 2 minutes.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	waited := false
+
 	// Socket lifetime context — must outlive dial attempts (not per-try timeout).
 	sockCtx, sockCancel := context.WithCancel(context.Background())
+
+	cleanupFail := func(ret error) (*Manager, error) {
+		sockCancel()
+		if !waited && cmd.Process != nil {
+			_ = killProcessGroup(cmd, syscall.SIGKILL)
+		}
+		if !waited {
+			select {
+			case <-waitCh:
+				waited = true
+			case <-time.After(3 * time.Second):
+			}
+		}
+		_ = os.RemoveAll(tmp)
+		return nil, ret
+	}
+
+	earlyExit := func(waitErr error) (*Manager, error) {
+		waited = true
+		if cmd.ProcessState != nil {
+			return cleanupFail(fmt.Errorf("kernel process exited early: %s", cmd.ProcessState.String()))
+		}
+		if waitErr != nil {
+			return cleanupFail(fmt.Errorf("kernel process exited early: %w", waitErr))
+		}
+		return cleanupFail(fmt.Errorf("kernel process exited early"))
+	}
+
+	// Reap an abandoned Dial so sockets do not leak if the process dies mid-dial.
+	// zmq dial often ignores cancel until its own timeout, so callers must not
+	// block on this when fail-fast matters.
+	abandonDial := func(dialCh <-chan dialOutcome) {
+		go func() {
+			o := <-dialCh
+			if o.conn != nil {
+				_ = o.conn.Close()
+			}
+		}()
+	}
 
 	var conn *Conn
 	deadline := time.Now().Add(2 * time.Minute)
@@ -67,40 +117,56 @@ func Start(ctx context.Context, kernelName, workDir string) (*Manager, error) {
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
-			sockCancel()
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			_ = os.RemoveAll(tmp)
-			return nil, err
+			return cleanupFail(err)
 		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			sockCancel()
-			_ = os.RemoveAll(tmp)
-			return nil, fmt.Errorf("kernel process exited early: %v", cmd.ProcessState)
-		}
-		conn, lastErr = Dial(sockCtx, cf, session)
-		if lastErr == nil {
-			break
-		}
+
+		// Cheap poll: catch instant-exit argv (/bin/false, missing binary) before
+		// paying multi-socket Dial cost.
 		select {
+		case waitErr := <-waitCh:
+			return earlyExit(waitErr)
+		default:
+		}
+
+		dialCh := make(chan dialOutcome, 1)
+		go func() {
+			c, e := Dial(sockCtx, cf, session)
+			dialCh <- dialOutcome{conn: c, err: e}
+		}()
+
+		var outcome dialOutcome
+		select {
+		case waitErr := <-waitCh:
+			// Process died while dialing — do not wait for zmq timeouts.
+			sockCancel()
+			abandonDial(dialCh)
+			return earlyExit(waitErr)
 		case <-ctx.Done():
 			sockCancel()
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			_ = os.RemoveAll(tmp)
-			return nil, ctx.Err()
+			abandonDial(dialCh)
+			return cleanupFail(ctx.Err())
+		case outcome = <-dialCh:
+		}
+
+		if outcome.err == nil {
+			conn = outcome.conn
+			break
+		}
+		lastErr = outcome.err
+
+		select {
+		case waitErr := <-waitCh:
+			return earlyExit(waitErr)
+		case <-ctx.Done():
+			return cleanupFail(ctx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
 	if conn == nil {
-		sockCancel()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = os.RemoveAll(tmp)
 		if lastErr == nil {
 			lastErr = fmt.Errorf("dial timeout")
 		}
-		return nil, lastErr
+		return cleanupFail(lastErr)
 	}
 
 	m := &Manager{
@@ -113,6 +179,7 @@ func Start(ctx context.Context, kernelName, workDir string) (*Manager, error) {
 		connPath: connPath,
 		tmpDir:   tmp,
 		cancel:   sockCancel,
+		waitCh:   waitCh,
 	}
 	infoCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -121,6 +188,11 @@ func Start(ctx context.Context, kernelName, workDir string) (*Manager, error) {
 		return nil, fmt.Errorf("kernel_info: %w", err)
 	}
 	return m, nil
+}
+
+type dialOutcome struct {
+	conn *Conn
+	err  error
 }
 
 // Interrupt asks the kernel to stop the current execution via control-channel
@@ -152,21 +224,28 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 	if m.Cmd != nil && m.Cmd.Process != nil {
 		_ = killProcessGroup(m.Cmd, syscall.SIGINT)
-		done := make(chan error, 1)
-		go func() { done <- m.Cmd.Wait() }()
+		// Prefer the Wait started at spawn; fall back only if missing (tests).
+		waitCh := m.waitCh
+		if waitCh == nil {
+			waitCh = make(chan error, 1)
+			cmd := m.Cmd
+			go func() { waitCh <- cmd.Wait() }()
+		}
 		select {
-		case <-done:
+		case <-waitCh:
 		case <-time.After(3 * time.Second):
 			_ = killProcessGroup(m.Cmd, syscall.SIGKILL)
-			<-done
+			<-waitCh
 		case <-ctx.Done():
 			_ = killProcessGroup(m.Cmd, syscall.SIGKILL)
-			<-done
+			<-waitCh
 		}
 		m.Cmd = nil
+		m.waitCh = nil
 	}
 	if m.tmpDir != "" {
 		_ = os.RemoveAll(m.tmpDir)
+		m.tmpDir = ""
 	}
 	return nil
 }
