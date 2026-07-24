@@ -57,7 +57,7 @@
             </label>
           </li>
           <li><button type="button" id="menu-force-save">Force save</button></li>
-          <li><a href="/api/notebooks/{{ .Path }}?download=1" id="menu-export">Export .ipynb</a></li>
+          <li><a href="{{ .ExportURL }}" id="menu-export">Export .ipynb</a></li>
           <li class="menu-title text-xs">About</li>
           <li><span class="text-xs text-base-content/55 pointer-events-none break-all" id="menu-about-path">{{ .Path }}</span></li>
         </ul>

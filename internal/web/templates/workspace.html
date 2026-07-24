@@ -51,7 +51,7 @@
     <ul class="g-nb-list" role="list">
       {{ range .Notebooks }}
       <li>
-        <a class="g-nb-row" href="/n/{{ . }}">
+        <a class="g-nb-row" href="{{ .Href }}">
           <span class="g-nb-icon" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
@@ -59,7 +59,7 @@
               <path d="M8 7h8M8 11h6"/>
             </svg>
           </span>
-          <span class="g-nb-name font-code">{{ . }}</span>
+          <span class="g-nb-name font-code">{{ .Name }}</span>
           <span class="g-nb-chevron text-base-content/35" aria-hidden="true">→</span>
         </a>
       </li>

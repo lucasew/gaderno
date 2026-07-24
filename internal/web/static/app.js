@@ -21,6 +21,16 @@ import { createCollabSession } from "./editor.js";
   let api = null;
   let ws = null;
 
+  // Percent-encode each path segment so "My Notebook.ipynb" works in /ws/… URLs.
+  function encodeNotebookPath(p) {
+    return String(p || "")
+      .split("/")
+      .map(function (seg) {
+        return encodeURIComponent(seg);
+      })
+      .join("/");
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -146,7 +156,8 @@ import { createCollabSession } from "./editor.js";
     if (!path) return;
     sessionReady = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    let url = proto + "://" + location.host + "/ws/notebooks/" + path;
+    let url =
+      proto + "://" + location.host + "/ws/notebooks/" + encodeNotebookPath(path);
     // SPEC: short-lived ticket when shared token is set (browsers cannot set Authorization on WS).
     // Cookie auth also works; ticket is preferred and one-shot.
     try {

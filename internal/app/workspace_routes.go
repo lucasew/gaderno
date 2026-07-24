@@ -22,6 +22,12 @@ func loadTemplate(name string) *template.Template {
 
 var listPage = loadTemplate("workspace.html")
 
+// notebookLink is one workspace list row: display name + safe /n/… href.
+type notebookLink struct {
+	Name string
+	Href template.URL // pre-escaped; do not re-escape in the template
+}
+
 func registerWorkspaceRoutes(mux *http.ServeMux, ws *workspace.Workspace, logger *slog.Logger) {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		list, err := ws.List()
@@ -30,8 +36,15 @@ func registerWorkspaceRoutes(mux *http.ServeMux, ws *workspace.Workspace, logger
 			http.Error(w, "list failed", http.StatusInternalServerError)
 			return
 		}
+		links := make([]notebookLink, 0, len(list))
+		for _, name := range list {
+			links = append(links, notebookLink{
+				Name: name,
+				Href: template.URL("/n/" + EscapeNotebookPath(name)),
+			})
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := listPage.Execute(w, map[string]any{"Notebooks": list}); err != nil {
+		if err := listPage.Execute(w, map[string]any{"Notebooks": links}); err != nil {
 			logger.Error("render list", "err", err)
 		}
 	})
@@ -67,7 +80,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, ws *workspace.Workspace, logger
 			return
 		}
 		if wantsHTML(r) {
-			http.Redirect(w, r, "/n/"+path, http.StatusSeeOther)
+			http.Redirect(w, r, "/n/"+EscapeNotebookPath(path), http.StatusSeeOther)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

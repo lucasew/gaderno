@@ -50,9 +50,12 @@ func registerNotebookRoutes(mux *http.ServeMux, st *store.Store, reg *session.Re
 		}
 		pathJSON, _ := json.Marshal(path)
 		kernelJSON, _ := json.Marshal(defaultKernel)
+		// template.URL: already percent-encoded; avoid html/template double-escaping %.
+		exportURL := template.URL("/api/notebooks/" + EscapeNotebookPath(path) + "?download=1")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := notebookPage.Execute(w, map[string]any{
 			"Path":       path,
+			"ExportURL":  exportURL,
 			"PathJSON":   template.JS(pathJSON),
 			"KernelJSON": template.JS(kernelJSON),
 			"Cells":      cells,
